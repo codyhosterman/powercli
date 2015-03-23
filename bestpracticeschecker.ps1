@@ -32,7 +32,7 @@ $vcpass = "password"
 $logfolder = "C:\Users\cody.PURESTORAGE\Documents\Results\"
 #############################
 
-
+If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "bestpracticeresults.txt"
 connect-viserver -Server $vcenter -username $vcuser -password $vcpass|out-null
 $hosts= get-vmhost
