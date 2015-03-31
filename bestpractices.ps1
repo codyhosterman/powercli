@@ -36,7 +36,7 @@ $hosts= get-cluster |get-vmhost
 $iopslimits = 1..1000
 do 
    {
-      $iops = read-host "Please enter an IO Operation Limit (1 to 1000): " 
+      $iops = read-host "Please enter an IO Operation Limit (1 to 1000 - 1 RECOMMENDED): " 
       $iopsnumber=$iops
      $iops = "iops=" + $iops  
    }
@@ -46,7 +46,8 @@ write-host "Iterating through all ESXi hosts..."
 write-host 
 foreach ($esx in $hosts) 
  {
-      $esxcli=get-esxcli -VMHost $esx
+    if ($esx.PowerState -eq 'PoweredOn')
+    { $esxcli=get-esxcli -VMHost $esx
       write-host
       write-host
       write-host "==================================================================================="
@@ -180,4 +181,5 @@ foreach ($esx in $hosts)
                       write-host "No existing Pure Storage volumes found on this host."
                   }
      }
+}
  disconnect-viserver -Server $vcenter -confirm:$false
