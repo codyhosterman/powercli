@@ -30,6 +30,7 @@ $vcenter = ""
 $vcuser = ""
 $vcpass = ""
 $logfolder = "C:\folder\folder\etc\"
+$powercliversion = 6 #only change if your PowerCLI version is earlier than 6.0
 #**********************************
 
 
@@ -66,10 +67,11 @@ Supports:
 If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "setbestpractices.txt"
 
-#Important PowerCLI if not done and connect to vCenter
-if ( (Get-PSSnapin -Name VMware.* -ErrorAction SilentlyContinue) -eq $null )
+#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. For PowerCLI no import is needed since it is a module
+$snapin = Get-PSSnapin -Name vmware.vimautomation.core -ErrorAction SilentlyContinue
+if ($snapin.Name -eq $null )
 {
-    Add-PsSnapin VMware.VimAutomation.Core
+    if ($powercliversion -ne 6) {Add-PsSnapin VMware.VimAutomation.Core} 
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
 connect-viserver -Server $vcenter -username $vcuser -password $vcpass|out-null

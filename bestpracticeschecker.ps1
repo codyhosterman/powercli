@@ -30,7 +30,14 @@ $vcenter = "vcenter IP"
 $vcuser = "username"
 $vcpass = "password"
 $logfolder = "C:\Users\cody.PURESTORAGE\Documents\Results\"
+$powercliversion = 6 #only change if your PowerCLI version is earlier than 6.0
 #############################
+#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. For PowerCLI no import is needed since it is a module
+$snapin = Get-PSSnapin -Name vmware.vimautomation.core -ErrorAction SilentlyContinue
+if ($snapin.Name -eq $null )
+{
+    if ($powercliversion -ne 6) {Add-PsSnapin VMware.VimAutomation.Core} 
+}
 
 If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "bestpracticeresults.txt"
