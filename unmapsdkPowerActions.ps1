@@ -1,4 +1,10 @@
-﻿#***************************************************************************************************
+﻿param
+(
+   [Parameter(Mandatory=$true)]
+   [VMware.VimAutomation.ViCore.Types.V1.Inventory.Cluster]
+   $cluster
+);
+#***************************************************************************************************
 # **********SPECIAL POWERACTIONS VERSION!!!!***********
 # **********ONLY FOR USE WITH VMWARE POWERACTIONS******
 #
