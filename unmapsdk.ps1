@@ -1,47 +1,24 @@
-﻿Write-Host '             __________________________'
-Write-Host '            /++++++++++++++++++++++++++\'           
-Write-Host '           /++++++++++++++++++++++++++++\'           
-Write-Host '          /++++++++++++++++++++++++++++++\'         
-Write-Host '         /++++++++++++++++++++++++++++++++\'        
-Write-Host '        /++++++++++++++++++++++++++++++++++\'       
-Write-Host '       /++++++++++++/----------\++++++++++++\'     
-Write-Host '      /++++++++++++/            \++++++++++++\'    
-Write-Host '     /++++++++++++/              \++++++++++++\'   
-Write-Host '    /++++++++++++/                \++++++++++++\'  
-Write-Host '   /++++++++++++/                  \++++++++++++\' 
-Write-Host '   \++++++++++++\                  /++++++++++++/' 
-Write-Host '    \++++++++++++\                /++++++++++++/' 
-Write-Host '     \++++++++++++\              /++++++++++++/'  
-Write-Host '      \++++++++++++\            /++++++++++++/'    
-Write-Host '       \++++++++++++\          /++++++++++++/'     
-Write-Host '        \++++++++++++\'                   
-Write-Host '         \++++++++++++\'                           
-Write-Host '          \++++++++++++\'                          
-Write-Host '           \++++++++++++\'                         
-Write-Host '            \------------\'
-Write-Host
-Write-Host
-Write-host 'Pure Storage VMware ESXi UNMAP Script v3.0'
-write-host '----------------------------------------------'
-write-host
-#For info, refer to www.codyhosterman.com 
-
+﻿#***************************************************************************************************
+#VMWARE POWERCLI AND PURE STORAGE POWERSHELL SDK MUST BE INSTALLED ON THE MACHINE THIS IS RUNNING ON
+#***************************************************************************************************
+#
+#For info, refer to www.codyhosterman.com
+#
+#*****************************************************************
 #Enter the following parameters. Put all entries inside the quotes.
 #One or more FlashArrays are supported. Remove/add additional ,''s for more/less arrays.
 #Remove '<array IP or FQDN #>' and replace that entire string with a FlashArray IP or FQDN like '192.168.0.10'. Separate each array by a comma.
-#**********************************
+#*****************************************************************
 $vcenter = ''
 $vcuser = ''
 $vcpass = ''
-$flasharrays = @('<array IP or FQDN 1>','<array IP or FQDN 2>','<array IP or FQDN 3>')
+$flasharrays = @('<array IP or FQDN #>','<array IP or FQDN #>','<array IP or FQDN #>')
 $pureuser = ''
 $pureuserpwd = ''
 $logfolder = 'C:\folder\folder\etc\'
 $unmaplogfile = 'unmap.txt'
+$powercliversion = 6 #only change if your PowerCLI version is earlier than 6.0
 #End of parameters
-
-#Requires -Version 3
-
 <#
 *******Disclaimer:******************************************************
 This scripts are offered "as is" with no warranty.  While this 
@@ -67,24 +44,45 @@ Supports:
 -vCenter 5.5 and later
 -Each FlashArray datastore must be present to at least one ESXi version 5.5 or later host or it will not be reclaimed
 #>
-
 #Create log folder if non-existent
 If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + $unmaplogfile
 
+add-content $logfile '             __________________________'
+add-content $logfile '            /++++++++++++++++++++++++++\'           
+add-content $logfile '           /++++++++++++++++++++++++++++\'           
+add-content $logfile '          /++++++++++++++++++++++++++++++\'         
+add-content $logfile '         /++++++++++++++++++++++++++++++++\'        
+add-content $logfile '        /++++++++++++++++++++++++++++++++++\'       
+add-content $logfile '       /++++++++++++/----------\++++++++++++\'     
+add-content $logfile '      /++++++++++++/            \++++++++++++\'    
+add-content $logfile '     /++++++++++++/              \++++++++++++\'   
+add-content $logfile '    /++++++++++++/                \++++++++++++\'  
+add-content $logfile '   /++++++++++++/                  \++++++++++++\' 
+add-content $logfile '   \++++++++++++\                  /++++++++++++/' 
+add-content $logfile '    \++++++++++++\                /++++++++++++/' 
+add-content $logfile '     \++++++++++++\              /++++++++++++/'  
+add-content $logfile '      \++++++++++++\            /++++++++++++/'    
+add-content $logfile '       \++++++++++++\          /++++++++++++/'     
+add-content $logfile '        \++++++++++++\'                   
+add-content $logfile '         \++++++++++++\'                           
+add-content $logfile '          \++++++++++++\'                          
+add-content $logfile '           \++++++++++++\'                         
+add-content $logfile '            \------------\'
+add-content $logfile 'Pure Storage VMware ESXi UNMAP Script v3.1'
+add-content $logfile '----------------------------------------------------------------------------------------------------'
+
 #Connect to FlashArray via REST
 $facount=0
-$purevols=$null
+$purevolumes=@()
 $purevol=$null
 $EndPoint= @()
-
 $Pwd = ConvertTo-SecureString $pureuserpwd -AsPlainText -Force
 $Creds = New-Object System.Management.Automation.PSCredential ($pureuser, $pwd)
 
 <#Connect to FlashArray via REST with the SDK
-
-Creates an array of connections for as many FlashArrays as you have entered into the $flasharrays variable. Assumes the same credentials are in use for every FlashArray
-
+Creates an array of connections for as many FlashArrays as you have entered into the $flasharrays variable. 
+Assumes the same credentials are in use for every FlashArray
 #>
 
 foreach ($flasharray in $flasharrays)
@@ -92,146 +90,120 @@ foreach ($flasharray in $flasharrays)
     if ($facount -eq 0)
     {
         $EndPoint = @(New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError)
-        $purevolumes = @(Get-PfaVolumes -Array $EndPoint[$facount])
+        $purevolumes += Get-PfaVolumes -Array $EndPoint[$facount]
         $tempvols = @(Get-PfaVolumes -Array $EndPoint[$facount])  
-        $arraysnlist = @(@{$tempvols[0].serial.substring(0,16) = $facount})
+        $arraysnlist = @($tempvols.serial[0].substring(0,16))
     }
     else
     {
         $EndPoint += New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError
         $purevolumes += Get-PfaVolumes -Array $EndPoint[$facount]
         $tempvols = Get-PfaVolumes -Array $EndPoint[$facount]   
-        $arraysnlist += @{$tempvols[0].serial.substring(0,16) = $facount}
+        $arraysnlist += $tempvols.serial[0].substring(0,16)
     }
     $facount = $facount + 1
 }
 
-write-host 'Connection to FlashArray successful' -foregroundcolor green
-write-host
-add-content $logfile 'Connected to FlashArray:'
-add-content $logfile $purevip
-add-content $logfile '----------------'
+add-content $logfile 'Connected to the following FlashArray(s):'
+add-content $logfile $flasharrays
+add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-#Important PowerCLI if not done and connect to vCenter
-if ( (Get-PSSnapin -Name VMware.* -ErrorAction SilentlyContinue) -eq $null )
+#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. For PowerCLI no import is needed since it is a module
+$snapin = Get-PSSnapin -Name vmware.vimautomation.core -ErrorAction SilentlyContinue
+if ($snapin.Name -eq $null )
 {
-    Add-PsSnapin VMware.VimAutomation.Core
+    if ($powercliversion -ne 6) {Add-PsSnapin VMware.VimAutomation.Core} 
 }
-#Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
-#Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
+Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
+Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
 connect-viserver -Server $vcenter -username $vcuser -password $vcpass|out-null
-write-host 'Connection to vCenter successful' -foregroundcolor green
-write-host
-add-content $logfile 'Connected to vCenter:'
-add-content $logfile $vcenter
-add-content $logfile '----------------'
+add-content $logfile ('Connected to vCenter at ' + $vcenter)
+add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 #Gather VMFS Datastores and identify how many are Pure Storage volumes
-write-host 'Initiating VMFS UNMAP for all Pure Storage volumes in the vCenter' -foregroundcolor Cyan
-write-host 'Searching for VMFS volumes to reclaim (UNMAP)'
 $datastores = get-datastore
-write-host 'Found ' $datastores.count ' VMFS volume(s).'
-write-host
-write-host 'Iterating through VMFS volumes and running a reclamation on Pure Storage volumes only'
-write-host
-write-host 'Please be patient, this process can take a long time depending on how many volumes and their capacity'
-write-host '------------------------------------------------------------------------------------------------------'
-write-host
 add-content $logfile 'Found the following datastores:'
 add-content $logfile $datastores
-add-content $logfile '***************'
+add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 #Starting UNMAP Process on datastores
 $volcount=0
 $purevol = $null
 foreach ($datastore in $datastores)
 {
-    write-host '--------------------------------------------------------------------------'
-    write-host 'Analyzing the following volume:'
-    write-host
     $esx = $datastore | get-vmhost | where-object {($_.version -like '5.5.*') -or ($_.version -like '6.0.*')} |Select-Object -last 1
     if ($datastore.Type -ne 'VMFS')
     {
-        write-host 'This volume is not a VMFS volume and cannot be reclaimed. Skipping...'
-        write-host $datastore.Type
-        add-content $logfile 'This volume is not a VMFS volume and cannot be reclaimed. Skipping...'
-        add-content $logfile $datastore.Type
+        add-content $logfile ('This volume is not a VMFS volume it is of type ' + $datastore.Type + ' and cannot be reclaimed. Skipping...')
+        add-content $logfile '----------------------------------------------------------------------------------------------------'
     }
     else
     {
-        $lun = get-scsilun -datastore $datastore | select-object -last 1
+        $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName | select-object -last 1
+        $datastore.ExtensionData.Info.Vmfs.Extent.DiskName
         $esxcli=get-esxcli -VMHost $esx
-        add-content $logfile 'The following datastore is being examined:'
-        add-content $logfile $datastore 
-        add-content $logfile 'The following ESXi is the chosen source:'
-        add-content $logfile $esx 
-        write-host 'VMFS Datastore:' $datastore.Name $lun.CanonicalName
-
-        if ($lun.canonicalname -like 'naa.624a9370*')
+        add-content $logfile ('The datastore named ' + $datastore + ' is being examined')
+        add-content $logfile ''
+        add-content $logfile ('The ESXi named ' + $esx + ' will run the UNMAP/reclaim operation')
+        add-content $logfile ''
+        if ($lun -like 'naa.624a9370*')
         {
-            write-host $datastore.name 'is a Pure Storage Volume and will be reclaimed.' -foregroundcolor Cyan
-            write-host
-            $volserial = ($lun.CanonicalName.ToUpper()).substring(12)
+            $volserial = ($lun.ToUpper()).substring(12)
             $purevol = $purevolumes | where-object { $_.serial -eq $volserial }
-            $arraychoice = $arraysnlist.($volserial.substring(0,16))
+            for($i=0; $i -lt $arraysnlist.count; $i++)
+            {
+                if ($arraysnlist[$i] -eq ($volserial.substring(0,16)))
+                    {
+                        $arraychoice = $i
+                    }
+            }
             $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
             $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
             $volphysicalcapacity = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
             add-content $logfile 'This datastore is a Pure Storage Volume.'
-            add-content $logfile $lun.CanonicalName
-            add-content $logfile 'The current data reduction for this volume prior to UNMAP is:'
-            add-content $logfile $volreduction
-            add-content $logfile 'The current physical space consumption in GB of this device prior to UNMAP is:'
-            add-content $logfile $volphysicalcapacity
-            write-host 'This volume has a data reduction ratio of' $volreduction 'to 1 prior to reclamation.' -foregroundcolor green
-            write-host 'This volume has' $volphysicalcapacity 'GB of data physically written to the SSDs on the FlashArray prior to reclamation.' -foregroundcolor green
-            write-host
-            write-host 'Determining maximum allowed block count for this datastore (1 % of free capacity)'
-            $blockcount = [math]::floor($datastore.FreeSpaceMB * .01)
-            write-host 'The maximum allowed block count for this datastore is' $blockcount -foregroundcolor green
-            add-content $logfile 'The maximum allowed block count for this datastore is'
-            add-content $logfile $blockcount
-            write-host 'Initiating reclaim...Operation time will vary depending on block count, free capacity of volume and other factors.'
+            add-content $logfile $lun
+            add-content $logfile ''
+            add-content $logfile ('The current data reduction for this volume before UNMAP is ' + $volreduction + " to 1")
+            add-content $logfile ('The  physical space consumption in GB of this device after UNMAP is ' + $volphysicalcapacity)
+            add-content $logfile ''
+            #Calculating optimal block count. If VMFS is 75% full or more the count must be 200 MB only. Ideal block count is 1% of free space of the VMFS in MB
+            if ((1 - $datastore.FreeSpaceMB/$datastore.CapacityMB) -ge .75)
+            {
+                $blockcount = 200
+                add-content $logfile 'The volume is 75% or more full so the block count is overridden to 200 MB. This will slow down the reclaim dramatically'
+                add-content $logfile 'It is recommended to either free up space on the volume or increase the capacity so it is less than 75% full'
+                add-content $logfile ("The block count in MB will be " + $blockcount)
+            }
+            else
+            {
+                $blockcount = [math]::floor($datastore.FreeSpaceMB * .01)
+                add-content $logfile ("The maximum allowed block count for this datastore is " + $blockcount)
+            }
             $esxcli.storage.vmfs.unmap($blockcount, $datastore.Name, $null) |out-null
-            write-host
             Start-Sleep -s 10
-            write-host 'Reclaim complete.'
-            write-host
-            write-host 'Results:'
-            write-host '-----------'
             $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
             $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
             $volphysicalcapacitynew = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
-            write-host 'This volume now has a data reduction ratio of' $volreduction 'to 1 after reclamation.' -foregroundcolor green
-            write-host 'This volume now has' $volphysicalcapacitynew 'GB of data physically written to the SSDs on the FlashArray after reclamation.' -foregroundcolor green
             $unmapsavings = ($volphysicalcapacity - $volphysicalcapacitynew)
-            write-host
-            write-host 'The UNMAP process has reclaimed' $unmapsavings 'GB of space from this volume on the FlashArray.' -foregroundcolor green
             $volcount=$volcount+1
-            add-content $logfile 'The new data reduction for this volume after UNMAP is:'
-            add-content $logfile $volreduction
-            add-content $logfile 'The new physical space consumption in GB of this device after UNMAP is:'
-            add-content $logfile $volphysicalcapacitynew
-            add-content $logfile 'The following capacity in GB has been reclaimed from the FlashArray from this volume:'
-            add-content $logfile $unmapsavings
-            add-content $logfile '---------------------'
+            add-content $logfile ''
+            add-content $logfile ('The new data reduction for this volume after UNMAP is ' + $volreduction + " to 1")
+            add-content $logfile ('The new physical space consumption in GB of this device after UNMAP is ' + $volphysicalcapacitynew)
+            add-content $logfile ("$unmapsavings" + ' in GB has been reclaimed from the FlashArray from this volume')
+            add-content $logfile '----------------------------------------------------------------------------------------------------'
             Start-Sleep -s 5
         }
         else
         {
             add-content $logfile 'This datastore is NOT a Pure Storage Volume. Skipping...'
-            add-content $logfile $lun.CanonicalName
-            add-content $logfile '---------------------'
-            write-host $datastore.name ' is not a Pure Volume and will not be reclaimed. Skipping...' -foregroundcolor red
+            add-content $logfile $lun
+            add-content $logfile '----------------------------------------------------------------------------------------------------'
         }
     }
 }
-write-host '--------------------------------------------------------------------------'
-write-host 'Reclamation finished. A total of' $volcount 'Pure Storage volume(s) were reclaimed'
-
 #disconnecting sessions
 disconnect-viserver -Server $vcenter -confirm:$false
-foreach ($flasharray in $flasharrays)
+foreach ($flasharray in $endpoint)
 {
     Disconnect-PfaArray -Array $flasharray
 }
