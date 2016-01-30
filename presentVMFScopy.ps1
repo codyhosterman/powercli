@@ -20,7 +20,7 @@ Write-Host "          \++++++++++++\"
 Write-Host "           \++++++++++++\"                         
 Write-Host "            \------------\"
 Write-Host
-Write-host "Pure Storage VMware Volume Refresh Script v1.0"
+Write-host "Pure Storage VMware Volume Refresh Script v1.1"
 write-host "----------------------------------------------"
 write-host
 <#
@@ -48,25 +48,48 @@ Supports:
 -FlashArray 400 Series and //m
 #>
 
-$flasharrays = @()
-$arraycount = Read-Host "How many FlashArrays do you want to search? [Enter a whole number 1 or higher]"
-Write-Host "Please enter each FlashArray FQDN or IP one at a time and press enter after each entry"
-for ($faentry=1; $faentry -le $arraycount; $faentry++)
+while ($varsCorrect -ne "Y")
 {
-    $flasharrays += Read-Host "Enter FlashArray FQDN or IP"
+    $flasharrays = @()
+    $arraycount = Read-Host "How many FlashArrays do you want to search? [Enter a whole number 1 or higher]"
+    Write-Host "Please enter each FlashArray FQDN or IP one at a time and press enter after each entry"
+    for ($faentry=1; $faentry -le $arraycount; $faentry++)
+    {
+        $flasharrays += Read-Host "Enter FlashArray FQDN or IP"
+    }
+    $pureuser = Read-Host "Enter FlashArray user name"
+    $pureuserpwd = Read-Host "Enter FlashArray password" -AsSecureString
+    $vcenter = Read-Host "Enter vCenter FQDN or IP"
+    $vcuser = Read-Host "Enter vCenter user name"
+    $vcpass = Read-Host "Enter vCenter password" -AsSecureString
+    $vmfsname = Read-Host "Enter Source VMFS Name"
+    $recoveryvmfsname = Read-Host "Enter Recovery VMFS Name"
+    write-host ""
+    $varsCorrect = read-host "Are the above values entered accurately? Y/N"
 }
-$pureuser = Read-Host "Enter FlashArray user name"
-$pureuserpwd = Read-Host "Enter FlashArray password" -AsSecureString
-$vcenter = Read-Host "Enter vCenter FQDN or IP"
-$vcuser = Read-Host "Enter vCenter user name"
-$vcpass = Read-Host "Enter vCenter password" -AsSecureString
-$vmfsname = Read-Host "Enter Source VMFS Name"
-$recoveryvmfsname = Read-Host "Enter Recovery VMFS Name"
+
 $purevolumes=@()
 $EndPoint= @()
 $FACreds = New-Object System.Management.Automation.PSCredential ($pureuser, $pureuserpwd)
 $VCCreds = New-Object System.Management.Automation.PSCredential ($vcuser, $vcpass)
 $facount = 0
+
+#A function to rescan all of the input ESXi servers and rescan for VMFS volumes. This starts all host operations in parallel and waits for them all to complete. Is called throughout as needed
+function rescanESXiHosts
+{
+    foreach ($esxi in $hosts) 
+    {
+         $argList = @($vcenter, $VCCreds, $esxi)
+         $job = Start-Job -ScriptBlock{ 
+             Connect-VIServer -Server $args[0] -Credential $args[1]
+             Get-VMHost -Name $args[2] | Get-VMHostStorage -RescanAllHba -RescanVMFS
+             Disconnect-VIServer -Confirm:$false
+         } -ArgumentList $argList
+     }
+ Get-Job | Wait-Job |out-null
+ }
+
+#Connect to each FlashArray and get all of their volume information
 foreach ($flasharray in $flasharrays)
 {
     if ($facount -eq 0)
@@ -85,7 +108,14 @@ foreach ($flasharray in $flasharrays)
     }
     $facount = $facount + 1
 }
+
+#Connect to vCenter
+Set-PowerCLIConfiguration -DisplayDeprecationWarnings:$false -confirm:$false| Out-Null
 connect-viserver -Server $vcenter -Credential $VCCreds|out-null
+write-host "*****************************************************************"
+write-host ""
+
+#Find which FlashArray the source VMFS volume is on
 $datastore = get-datastore $vmfsname
 $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName 
 if ($lun -like 'naa.624a9370*')
@@ -108,6 +138,7 @@ else
     write-host 'This datastore is NOT a Pure Storage Volume.'
 }
 
+#Find which FlashArray the target VMFS volume is on
 $recoverydatastore = get-datastore $recoveryvmfsname
 $recoverylun = $recoverydatastore.ExtensionData.Info.Vmfs.Extent.DiskName 
 if ($recoverylun -like 'naa.624a9370*')
@@ -133,6 +164,7 @@ else
 if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
 {
     $vms = $recoverydatastore |get-vm
+    #Make sure there are no VMs on the recovery VMFS
     if ($vms.count -ge 1)
     {
         write-host ("There are VMs registered to the recovery datastore. Unregister them first then re-run this script.")
@@ -140,34 +172,91 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
     else
     {
         $hosts = $recoverydatastore |get-vmhost
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
-        $recoverydatastore | Remove-Datastore -vmhost $hosts[0] -Confirm:$false
-        Start-Sleep -s 5
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
-        Start-Sleep -s 10
+        foreach ($esxi in $hosts)
+        {
+                        
+            $storageSystem = Get-View $esxi.Extensiondata.ConfigManager.StorageSystem
+            Write-Host "Unmounting VMFS and detaching" $recoverydatastore.Name "from host" $esxi.Name -foregroundcolor "red"
+			$StorageSystem.UnmountVmfsVolume($recoverydatastore.ExtensionData.Info.vmfs.uuid) |out-null
+            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxi | where {$_.CanonicalName -eq $recoverylun}).ExtensionData.Uuid) |out-null
+        }
+        <# Does the following:
+        1) Get the latest FlashArray snapshot from the source VMFS.
+        2) Gets any host groups and host the recovery volume is connected to
+        3) Removes the recovery volume from the hosts and/or host groups
+        4) Deletes the volume
+        5) Creates a new volume with the same name from the latest snapshot of the source 
+        6) Adds the volume back to all of its hosts and host groups
+        #>
+        rescanESXiHosts |out-null
         $esxcli = $hosts[0] | get-esxcli
         $snapshots = Get-PfaVolumeSnapshots -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
-        New-PfaVolume -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -Source $snapshots[0].name -overwrite |out-null
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
+        $fahosts = Get-PfaVolumeHostConnections -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name
+        $fahosts = $fahosts.host
+        $fahostgroups = Get-PfaVolumeHostGroupConnections -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name
+        $fahostgroups = $fahostgroups.hgroup |get-unique
+        if ($fahosts.count -ge 1)
+        {
+            write-host "The volume is presented privately to the following hosts:"
+            write-host $fahosts
+            write-host "Removing the volume from the host(s)..." -foregroundcolor "red"
+            foreach($fahost in $fahosts)
+            {
+                Remove-PfaHostVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
+            } 
+        }
+        if ($fahostgroups.count -ge 1)
+        {
+            write-host "The volume is presented to the following host groups:"
+            write-host $fahostgroups
+            write-host "Removing the volume from the host groups(s)..." -foregroundcolor "red"            
+            foreach($fahostgroup in $fahostgroups)
+            {
+                Remove-PfaHostGroupVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
+            } 
+        }
+        write-host "Deleting and permanently eradicating the volume named" $recoverypurevol.name -foregroundcolor "red"
+        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$arraychoice] -Name $recoverypurevol.name -Confirm:$false |out-null
+        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$arraychoice] -Name $recoverypurevol.name -Confirm:$false -Eradicate |out-null
+        $newvol = New-PfaVolume -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -Source $snapshots[0].name
+        write-host "Created a new volume with the name" $recoverypurevol.name "from the snapshot" $snapshots[0].name -foregroundcolor "green"
+        if ($fahosts.count -ge 1)
+        {
+            write-host "Adding the new volume back privately to the following host(s)" -foregroundcolor "green"
+            write-host $fahosts
+            foreach($fahost in $fahosts)
+            {
+                New-PfaHostVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
+            } 
+        }
+        if ($fahostgroups.count -ge 1)
+        {
+            write-host "Adding the new volume back to the following host group(s)" -foregroundcolor "green"
+            write-host $fahostgroups
+            foreach($fahostgroup in $fahostgroups)
+            {
+                New-PfaHostGroupVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
+            } 
+        }
         Start-Sleep -s 30
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
-        Start-Sleep -s 30
+        rescanESXiHosts
+        #resignatures the datastore after a rescan
         $esxcli.storage.vmfs.snapshot.resignature($vmfsname) |out-null
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
+        $recoverylun = ("naa.624a9370" + $newvol.serial)
+        rescanESXiHosts
         $datastores = $hosts[0] | Get-Datastore
+        #renames the VMFS back to the original recovery name
         foreach ($ds in $datastores)
         {
             $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
-            if ($naa -eq $recoverylun)
+            if ($naa -eq $recoverylun.ToLower())
             {
                 $resigds = $ds
             }
         } 
         $resigds | Set-Datastore -Name $recoveryvmfsname |out-null
-        Start-Sleep -s 20
-        $hosts | Get-VMHostStorage -RescanAllHba |out-null
+        write-host "Renaming the datastore" $resigds.name "back to" $recoveryvmfsname
     }
-
 }
 #disconnecting sessions
 disconnect-viserver -Server $vcenter -confirm:$false
