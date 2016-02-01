@@ -68,11 +68,8 @@ while ($varsCorrect -ne "Y")
     $varsCorrect = read-host "Are the above values entered accurately? Y/N"
 }
 
-$purevolumes=@()
-$EndPoint= @()
 $FACreds = New-Object System.Management.Automation.PSCredential ($pureuser, $pureuserpwd)
 $VCCreds = New-Object System.Management.Automation.PSCredential ($vcuser, $vcpass)
-$facount = 0
 
 #A function to rescan all of the input ESXi servers and rescan for VMFS volumes. This starts all host operations in parallel and waits for them all to complete. Is called throughout as needed
 function rescanESXiHosts
@@ -85,11 +82,32 @@ function rescanESXiHosts
              Get-VMHost -Name $args[2] | Get-VMHostStorage -RescanAllHba -RescanVMFS
              Disconnect-VIServer -Confirm:$false
          } -ArgumentList $argList
-     }
- Get-Job | Wait-Job |out-null
+    }
+    Get-Job | Wait-Job |out-null
  }
 
+#A function to unmount and detach the VMFS from all of the input ESXi servers. This starts all host operations in parallel and waits for them all to complete. Is called throughout as needed
+function unmountandDetachVMFS
+{
+    foreach ($esxi in $hosts)
+    {
+        $argList = @($vcenter, $VCCreds, $esxi, $recoverydatastore)
+        $job = Start-Job -ScriptBlock{
+            Connect-VIServer -Server $args[0] -Credential $args[1]
+            $esxihost = get-vmhost $args[2]
+            $datastore = get-datastore $args[3]               
+            $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem
+	        $StorageSystem.UnmountVmfsVolume($datastore.ExtensionData.Info.vmfs.uuid) |out-null
+            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $datastore.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) |out-null
+            Disconnect-VIServer -Confirm:$false
+         } -ArgumentList $argList
+    }
+    Get-Job | Wait-Job |out-null
+}
 #Connect to each FlashArray and get all of their volume information
+$facount = 0
+$purevolumes=@()
+$EndPoint= @()
 foreach ($flasharray in $flasharrays)
 {
     if ($facount -eq 0)
@@ -108,7 +126,6 @@ foreach ($flasharray in $flasharrays)
     }
     $facount = $facount + 1
 }
-
 #Connect to vCenter
 Set-PowerCLIConfiguration -DisplayDeprecationWarnings:$false -confirm:$false| Out-Null
 connect-viserver -Server $vcenter -Credential $VCCreds|out-null
@@ -172,14 +189,9 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
     else
     {
         $hosts = $recoverydatastore |get-vmhost
-        foreach ($esxi in $hosts)
-        {
-                        
-            $storageSystem = Get-View $esxi.Extensiondata.ConfigManager.StorageSystem
-            Write-Host "Unmounting VMFS and detaching" $recoverydatastore.Name "from host" $esxi.Name -foregroundcolor "red"
-			$StorageSystem.UnmountVmfsVolume($recoverydatastore.ExtensionData.Info.vmfs.uuid) |out-null
-            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxi | where {$_.CanonicalName -eq $recoverylun}).ExtensionData.Uuid) |out-null
-        }
+        write-host "Unmounting and detaching the VMFS volume from the following ESXi hosts:"
+        write-host $hosts
+        unmountandDetachVMFS
         <# Does the following:
         1) Get the latest FlashArray snapshot from the source VMFS.
         2) Gets any host groups and host the recovery volume is connected to
@@ -241,21 +253,33 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
         Start-Sleep -s 30
         rescanESXiHosts
         #resignatures the datastore after a rescan
-        $esxcli.storage.vmfs.snapshot.resignature($vmfsname) |out-null
+        Start-sleep -s 10
+        $unresolvedvmfs = $esxcli.storage.vmfs.snapshot.list($vmfsname)
         $recoverylun = ("naa.624a9370" + $newvol.serial)
-        rescanESXiHosts
-        $datastores = $hosts[0] | Get-Datastore
-        #renames the VMFS back to the original recovery name
-        foreach ($ds in $datastores)
+        if ($unresolvedvmfs.UnresolvedExtentCount -ge 2)
         {
-            $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
-            if ($naa -eq $recoverylun.ToLower())
+            write-host "ERROR: There are more than one unresolved copies of the source VMFS named" $vmfsname -foregroundcolor "red"
+            write-host "Please remove the additional copies in order to mount"
+        }
+        else
+        {
+            write-host "Resignaturing the VMFS on the device" $recoverylun "and then mounting it..."
+            $esxcli.storage.vmfs.snapshot.resignature($vmfsname) |out-null
+            rescanESXiHosts
+            $datastores = $hosts[0] | Get-Datastore
+            #renames the VMFS back to the original recovery name
+            foreach ($ds in $datastores)
             {
-                $resigds = $ds
-            }
-        } 
-        $resigds | Set-Datastore -Name $recoveryvmfsname |out-null
-        write-host "Renaming the datastore" $resigds.name "back to" $recoveryvmfsname
+                $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
+                if ($naa -eq $recoverylun.ToLower())
+                {
+                    $resigds = $ds
+                }
+            } 
+            $resigds | Set-Datastore -Name $recoveryvmfsname |out-null
+            write-host "Renaming the datastore" $resigds.name "back to" $recoveryvmfsname
+        }
+
     }
 }
 #disconnecting sessions
