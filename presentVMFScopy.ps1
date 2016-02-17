@@ -143,16 +143,23 @@ if ($lun -like 'naa.624a9370*')
     {
         if ($arraysnlist[$i] -eq ($volserial.substring(0,16)))
         {
-            $arraychoice = $i
+            $sourcearraychoice = $i
         }
     }
-    write-host ("The VMFS named " + $vmfsname + " is on a FlashArray named " + $EndPoint[$arraychoice].EndPoint)
-    write-host ("The FlashArray volume is named " + $purevol.name)
-    $volumeexists = 1
+    write-host ("The source VMFS named " + $vmfsname + " is on a FlashArray named " + $EndPoint[$sourcearraychoice].EndPoint)
+    write-host ("The source FlashArray volume is named " + $purevol.name)
+    if ($purevol -ne $null)
+    {
+        $volumeexists = 1
+    }
+    else
+    {
+        write-host "The target volume is a FlashArray volume, but not on one of the entered arrays"
+    }
 }
 else
 {
-    write-host 'This datastore is NOT a Pure Storage Volume.'
+    write-host 'The source datastore is NOT a FlashArray volume.'
 }
 
 #Find which FlashArray the target VMFS volume is on
@@ -166,16 +173,23 @@ if ($recoverylun -like 'naa.624a9370*')
     {
         if ($arraysnlist[$i] -eq ($recoveryvolserial.substring(0,16)))
         {
-            $recoveryarraychoice = $i
+            $targetarraychoice = $i
         }
     }
-    write-host ("The VMFS named " + $recoveryvmfsname + " is on a FlashArray named " + $EndPoint[$recoveryarraychoice].EndPoint)
-    write-host ("The FlashArray volume is named " + $recoverypurevol.name)
-    $recoveryvolumeexists = 1
+    write-host ("The target VMFS named " + $recoveryvmfsname + " is on a FlashArray named " + $EndPoint[$targetarraychoice].EndPoint)
+    write-host ("The target FlashArray volume is named " + $recoverypurevol.name)
+    if ($recoverypurevol -ne $null)
+    {
+        $recoveryvolumeexists = 1
+    }
+    else
+    {
+        write-host "The target volume is a FlashArray volume, but not on one of the entered arrays"
+    }
 }
 else
 {
-    write-host 'This datastore is NOT a Pure Storage Volume.'
+    write-host 'The target datastore is NOT a FlashArray volume.'
 }
 
 if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
@@ -202,10 +216,27 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
         #>
         rescanESXiHosts |out-null
         $esxcli = $hosts[0] | get-esxcli
-        $snapshots = Get-PfaVolumeSnapshots -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
-        $fahosts = Get-PfaVolumeHostConnections -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name
+        if ($EndPoint[$sourcearraychoice].EndPoint -eq $EndPoint[$targetarraychoice].EndPoint)
+        {
+            $snapshots = Get-PfaVolumeSnapshots -Array $EndPoint[$targetarraychoice] -VolumeName $purevol.name
+        }
+        if ($EndPoint[$sourcearraychoice].EndPoint -ne $EndPoint[$targetarraychoice].EndPoint)
+        {
+            $snaps = Get-PfaallVolumeSnapshots -array $EndPoint[$targetarraychoice]
+            $sourcearray = Get-PfaArrayAttributes -array $EndPoint[$sourcearraychoice]
+            $fullpurevolname = $sourcearray.array_name+":"+$purevol.name
+            $snapshots = @()
+            foreach ($snap in $snaps)
+            {
+                if ($snap.source -eq $fullpurevolname)
+                {
+                    $snapshots += $snap
+                }
+            }
+        }    
+        $fahosts = Get-PfaVolumeHostConnections -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name
         $fahosts = $fahosts.host
-        $fahostgroups = Get-PfaVolumeHostGroupConnections -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name
+        $fahostgroups = Get-PfaVolumeHostGroupConnections -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name
         $fahostgroups = $fahostgroups.hgroup |get-unique
         if ($fahosts.count -ge 1)
         {
@@ -214,7 +245,7 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
             write-host "Removing the volume from the host(s)..." -foregroundcolor "red"
             foreach($fahost in $fahosts)
             {
-                Remove-PfaHostVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
+                Remove-PfaHostVolumeConnection -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
             } 
         }
         if ($fahostgroups.count -ge 1)
@@ -224,13 +255,13 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
             write-host "Removing the volume from the host groups(s)..." -foregroundcolor "red"            
             foreach($fahostgroup in $fahostgroups)
             {
-                Remove-PfaHostGroupVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
+                Remove-PfaHostGroupVolumeConnection -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
             } 
         }
         write-host "Deleting and permanently eradicating the volume named" $recoverypurevol.name -foregroundcolor "red"
-        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$arraychoice] -Name $recoverypurevol.name -Confirm:$false |out-null
-        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$arraychoice] -Name $recoverypurevol.name -Confirm:$false -Eradicate |out-null
-        $newvol = New-PfaVolume -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -Source $snapshots[0].name
+        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$targetarraychoice] -Name $recoverypurevol.name -Confirm:$false |out-null
+        Remove-PfaVolumeOrSnapshot -Array $EndPoint[$targetarraychoice] -Name $recoverypurevol.name -Confirm:$false -Eradicate |out-null
+        $newvol = New-PfaVolume -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name -Source $snapshots[0].name
         write-host "Created a new volume with the name" $recoverypurevol.name "from the snapshot" $snapshots[0].name -foregroundcolor "green"
         if ($fahosts.count -ge 1)
         {
@@ -238,7 +269,7 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
             write-host $fahosts
             foreach($fahost in $fahosts)
             {
-                New-PfaHostVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
+                New-PfaHostVolumeConnection -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name -HostName $fahost |out-null
             } 
         }
         if ($fahostgroups.count -ge 1)
@@ -247,7 +278,7 @@ if (($volumeexists -eq 1) -and ($recoveryvolumeexists -eq 1))
             write-host $fahostgroups
             foreach($fahostgroup in $fahostgroups)
             {
-                New-PfaHostGroupVolumeConnection -Array $EndPoint[$arraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
+                New-PfaHostGroupVolumeConnection -Array $EndPoint[$targetarraychoice] -VolumeName $recoverypurevol.name -HostGroupName $fahostgroup |out-null
             } 
         }
         Start-Sleep -s 30
