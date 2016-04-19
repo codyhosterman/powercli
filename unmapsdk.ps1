@@ -69,7 +69,7 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage VMware ESXi UNMAP Script v3.1'
+add-content $logfile 'Pure Storage VMware ESXi UNMAP Script v3.2'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 #Connect to FlashArray via REST
@@ -104,6 +104,9 @@ foreach ($flasharray in $flasharrays)
     $facount = $facount + 1
 }
 
+write-host "Running UNMAP on FlashArray datastores. No further information is printed to the screen."
+write-host "Script information can be found at $logfile"
+
 add-content $logfile 'Connected to the following FlashArray(s):'
 add-content $logfile $flasharrays
 add-content $logfile '----------------------------------------------------------------------------------------------------'
@@ -137,6 +140,13 @@ foreach ($datastore in $datastores)
         add-content $logfile ('This volume is not a VMFS volume it is of type ' + $datastore.Type + ' and cannot be reclaimed. Skipping...')
         add-content $logfile '----------------------------------------------------------------------------------------------------'
     }
+    elseif ($esx.count -eq 0)
+    {
+        add-content $logfile ('The datastore named ' + $datastore + ' is being examined')
+        add-content $logfile ('This datastore has no 5.5 or later hosts to run UNMAP from. Skipping...')
+        add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+    } 
     else
     {
         $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName | select-object -last 1
