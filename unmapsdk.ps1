@@ -18,7 +18,7 @@ $pureuserpwd = ''
 $logfolder = 'C:\folder\folder\etc\'
 $unmaplogfile = 'unmap.txt'
 $powercliversion = 6 #only change if your PowerCLI version is earlier than 6.0
-#End of parameters
+#End of parameters 
 <#
 *******Disclaimer:******************************************************
 This scripts are offered "as is" with no warranty.  While this 
@@ -69,7 +69,7 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage VMware ESXi UNMAP Script v3.2'
+add-content $logfile 'Pure Storage VMware ESXi UNMAP Script v3.3'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 #Connect to FlashArray via REST
@@ -111,11 +111,14 @@ add-content $logfile 'Connected to the following FlashArray(s):'
 add-content $logfile $flasharrays
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. For PowerCLI no import is needed since it is a module
+#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. 
 $snapin = Get-PSSnapin -Name vmware.vimautomation.core -ErrorAction SilentlyContinue
 if ($snapin.Name -eq $null )
 {
     if ($powercliversion -ne 6) {Add-PsSnapin VMware.VimAutomation.Core} 
+}
+if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+. “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
 }
 Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
 Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
@@ -149,60 +152,99 @@ foreach ($datastore in $datastores)
     } 
     else
     {
-        $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName | select-object -last 1
-        $datastore.ExtensionData.Info.Vmfs.Extent.DiskName
-        $esxcli=get-esxcli -VMHost $esx
-        add-content $logfile ('The datastore named ' + $datastore + ' is being examined')
-        add-content $logfile ''
-        add-content $logfile ('The ESXi named ' + $esx + ' will run the UNMAP/reclaim operation')
-        add-content $logfile ''
-        if ($lun -like 'naa.624a9370*')
+        $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique 
+        if ($lun.count -eq 1)
         {
-            $volserial = ($lun.ToUpper()).substring(12)
-            $purevol = $purevolumes | where-object { $_.serial -eq $volserial }
-            for($i=0; $i -lt $arraysnlist.count; $i++)
+            add-content $logfile ($datastore.ExtensionData.Info.Vmfs.Extent.DiskName)
+            $esxcli=get-esxcli -VMHost $esx
+            add-content $logfile ('The datastore named ' + $datastore + ' is being examined')
+            add-content $logfile ''
+            add-content $logfile ('The ESXi named ' + $esx + ' will run the UNMAP/reclaim operation')
+            add-content $logfile ''
+            if ($lun -like 'naa.624a9370*')
             {
-                if ($arraysnlist[$i] -eq ($volserial.substring(0,16)))
+                $volserial = ($lun.ToUpper()).substring(12)
+                $purevol = $purevolumes | where-object { $_.serial -eq $volserial }
+                for($i=0; $i -lt $arraysnlist.count; $i++)
+                {
+                    if ($arraysnlist[$i] -eq ($volserial.substring(0,16)))
+                        {
+                            $arraychoice = $i
+                        }
+                }
+                $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
+                if ($purevol.name -eq $null)
+                {
+                   add-content $logfile 'This volume has not been found. It has likely been deleted from the FlashArray'
+                   add-content $logfile ('The volume was once on the FlashArray' + $arraychoice.endpoint) 
+                   add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+                }
+                else
+                {
+                    add-content $logfile ('The volume is on the FlashArray' + $arraychoice.endpoint)
+                    $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
+                    $volphysicalcapacity = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
+                    add-content $logfile 'This datastore is a Pure Storage Volume.'
+                    add-content $logfile ''
+                    add-content $logfile ('The current data reduction for this volume before UNMAP is ' + $volreduction + " to 1")
+                    add-content $logfile ('The  physical space consumption in GB of this device before UNMAP is ' + $volphysicalcapacity)
+                    add-content $logfile ''
+                    #Calculating optimal block count. If VMFS is 75% full or more the count must be 200 MB only. Ideal block count is 1% of free space of the VMFS in MB
+                    if ((1 - $datastore.FreeSpaceMB/$datastore.CapacityMB) -ge .75)
                     {
-                        $arraychoice = $i
+                        $blockcount = 200
+                        add-content $logfile 'The volume is 75% or more full so the block count is overridden to 200 MB. This will slow down the reclaim dramatically'
+                        add-content $logfile 'It is recommended to either free up space on the volume or increase the capacity so it is less than 75% full'
+                        add-content $logfile ("The block count in MB will be " + $blockcount)
                     }
+                    else
+                    {
+                        $blockcount = [math]::floor($datastore.FreeSpaceMB * .01)
+                        add-content $logfile ("The maximum allowed block count for this datastore is " + $blockcount)
+                    }
+                    $esxcli.storage.vmfs.unmap($blockcount, $datastore.Name, $null) |out-null
+                    Start-Sleep -s 10
+                    $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
+                    $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
+                    $volphysicalcapacitynew = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
+                    $unmapsavings = ($volphysicalcapacity - $volphysicalcapacitynew)
+                    $volcount=$volcount+1
+                    add-content $logfile ''
+                    add-content $logfile ('The new data reduction for this volume after UNMAP is ' + $volreduction + " to 1")
+                    add-content $logfile ('The new physical space consumption in GB of this device after UNMAP is ' + $volphysicalcapacitynew)
+                    add-content $logfile ("$unmapsavings" + ' in GB has been reclaimed from the FlashArray from this volume')
+                    add-content $logfile '----------------------------------------------------------------------------------------------------'
+                    Start-Sleep -s 5
+                }
             }
-            $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
-            $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
-            $volphysicalcapacity = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
-            add-content $logfile 'This datastore is a Pure Storage Volume.'
-            add-content $logfile $lun
-            add-content $logfile ''
-            add-content $logfile ('The current data reduction for this volume before UNMAP is ' + $volreduction + " to 1")
-            add-content $logfile ('The  physical space consumption in GB of this device after UNMAP is ' + $volphysicalcapacity)
-            add-content $logfile ''
-            #Calculating optimal block count. If VMFS is 75% full or more the count must be 200 MB only. Ideal block count is 1% of free space of the VMFS in MB
-            if ((1 - $datastore.FreeSpaceMB/$datastore.CapacityMB) -ge .75)
-            {
-                $blockcount = 200
-                add-content $logfile 'The volume is 75% or more full so the block count is overridden to 200 MB. This will slow down the reclaim dramatically'
-                add-content $logfile 'It is recommended to either free up space on the volume or increase the capacity so it is less than 75% full'
-                add-content $logfile ("The block count in MB will be " + $blockcount)
-            }
-            else
-            {
-                $blockcount = [math]::floor($datastore.FreeSpaceMB * .01)
-                add-content $logfile ("The maximum allowed block count for this datastore is " + $blockcount)
-            }
-            $esxcli.storage.vmfs.unmap($blockcount, $datastore.Name, $null) |out-null
-            Start-Sleep -s 10
-            $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
-            $volreduction = '{0:N3}' -f ($volinfo.data_reduction)
-            $volphysicalcapacitynew = '{0:N3}' -f ($volinfo.volumes/1024/1024/1024)
-            $unmapsavings = ($volphysicalcapacity - $volphysicalcapacitynew)
-            $volcount=$volcount+1
-            add-content $logfile ''
-            add-content $logfile ('The new data reduction for this volume after UNMAP is ' + $volreduction + " to 1")
-            add-content $logfile ('The new physical space consumption in GB of this device after UNMAP is ' + $volphysicalcapacitynew)
-            add-content $logfile ("$unmapsavings" + ' in GB has been reclaimed from the FlashArray from this volume')
-            add-content $logfile '----------------------------------------------------------------------------------------------------'
-            Start-Sleep -s 5
         }
+        elseif ($lun.count -gt 1)
+            {
+                add-content $logfile ('The volume spans more than one SCSI device, skipping FlashArray capacity queries')
+                add-content $logfile ($datastore.ExtensionData.Info.Vmfs.Extent.DiskName)
+                $esxcli=get-esxcli -VMHost $esx
+                add-content $logfile ('The datastore named ' + $datastore + ' is being examined')
+                add-content $logfile ''
+                add-content $logfile ('The ESXi named ' + $esx + ' will run the UNMAP/reclaim operation')
+                add-content $logfile ''
+                if ((1 - $datastore.FreeSpaceMB/$datastore.CapacityMB) -ge .75)
+                {
+                    $blockcount = 200
+                    add-content $logfile 'The volume is 75% or more full so the block count is overridden to 200 MB. This will slow down the reclaim dramatically'
+                    add-content $logfile 'It is recommended to either free up space on the volume or increase the capacity so it is less than 75% full'
+                    add-content $logfile ("The block count in MB will be " + $blockcount)
+                }
+                else
+                {
+                    $blockcount = [math]::floor($datastore.FreeSpaceMB * .01)
+                    add-content $logfile ("The maximum allowed block count for this datastore is " + $blockcount)
+                }
+                $esxcli.storage.vmfs.unmap($blockcount, $datastore.Name, $null) |out-null
+                Start-Sleep -s 10
+                add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+            }
         else
         {
             add-content $logfile 'This datastore is NOT a Pure Storage Volume. Skipping...'
