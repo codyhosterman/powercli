@@ -1,38 +1,19 @@
-﻿Write-Host "             __________________________"
-Write-Host "            /++++++++++++++++++++++++++\"           
-Write-Host "           /++++++++++++++++++++++++++++\"           
-Write-Host "          /++++++++++++++++++++++++++++++\"         
-Write-Host "         /++++++++++++++++++++++++++++++++\"        
-Write-Host "        /++++++++++++++++++++++++++++++++++\"       
-Write-Host "       /++++++++++++/----------\++++++++++++\"     
-Write-Host "      /++++++++++++/            \++++++++++++\"    
-Write-Host "     /++++++++++++/              \++++++++++++\"   
-Write-Host "    /++++++++++++/                \++++++++++++\"  
-Write-Host "   /++++++++++++/                  \++++++++++++\" 
-Write-Host "   \++++++++++++\                  /++++++++++++/" 
-Write-Host "    \++++++++++++\                /++++++++++++/" 
-Write-Host "     \++++++++++++\              /++++++++++++/"  
-Write-Host "      \++++++++++++\            /++++++++++++/"    
-Write-Host "       \++++++++++++\          /++++++++++++/"     
-Write-Host "        \++++++++++++\"                   
-Write-Host "         \++++++++++++\"                           
-Write-Host "          \++++++++++++\"                          
-Write-Host "           \++++++++++++\"                         
-Write-Host "            \------------\"
-Write-Host
-Write-host "Pure Storage VMware Set Best Practices Script v2.0"
-write-host "----------------------------------------------"
-write-host
-
-#Enter the following parameters. Put all entries inside the quotes:
+﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
+#Put all entries inside the quotes:
 #**********************************
 $vcenter = ""
 $vcuser = ""
 $vcpass = ""
 $logfolder = "C:\folder\folder\etc\"
-$powercliversion = 6 #only change if your PowerCLI version is earlier than 6.0
 #**********************************
 
+<#
+Optional parameters. Keep these values at default unless necessary and understood
+For a different IO Operations limit beside the Pure Storage recommended value of 1, change $iopsvalue to another integer value 1-1000. 
+To skip changing host-wide settings for XCOPY Transfer Size and In-Guest UNMAP change $hostwidesettings to $false
+#>
+$iopsvalue = 1
+$hostwidesettings = $true
 
 <#
 *******Disclaimer:******************************************************
@@ -46,245 +27,287 @@ will not be liable for any damage or loss to the system.
 This script will:
 -Check for a SATP rule for Pure Storage FlashArrays
 -Create a SATP rule for Round Robin and IO Operations Limit of 1 only for FlashArrays
--Fix a rule if an incorrect one is found
--If multiple rules are found it will skip. Manual fixing is needed
+-Remove any incorrectly configured Pure Storage FlashArray rules
 -Configure any existing devices properly (Pure Storage FlashArray devices only)
 -Set VAAI XCOPY transfer size to 16MB
 -Enable EnableBlockDelete on ESXi 6 hosts only
 
-All change operations are logged to a file and also 
-output to the screen. 
+All change operations are logged to a file. 
 
 This can be run directly from PowerCLI or from a standard PowerShell prompt. PowerCLI must be installed on the local host regardless.
 
 Supports:
 -FlashArray 400 Series and //m
 -vCenter 5.0 and later
+-PowerCLI 6.3 R1 or later required
 
+
+For info, refer to www.codyhosterman.com
 #>
 
 #Create log folder if non-existent
 If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "setbestpractices.txt"
+write-host "Checking and setting Pure Storage FlashArray Best Practices for VMWare on the ESXi hosts in this vCenter. No further information is printed to the screen."
+write-host "Script log information can be found at $logfile"
 
-#Important PowerCLI if not done and connect to vCenter. Adds PowerCLI Snapin if 5.8 and earlier. For PowerCLI no import is needed since it is a module
-$snapin = Get-PSSnapin -Name vmware.vimautomation.core -ErrorAction SilentlyContinue
-if ($snapin.Name -eq $null )
-{
-    if ($powercliversion -ne 6) {Add-PsSnapin VMware.VimAutomation.Core} 
+add-content $logfile '             __________________________'
+add-content $logfile '            /++++++++++++++++++++++++++\'           
+add-content $logfile '           /++++++++++++++++++++++++++++\'           
+add-content $logfile '          /++++++++++++++++++++++++++++++\'         
+add-content $logfile '         /++++++++++++++++++++++++++++++++\'        
+add-content $logfile '        /++++++++++++++++++++++++++++++++++\'       
+add-content $logfile '       /++++++++++++/----------\++++++++++++\'     
+add-content $logfile '      /++++++++++++/            \++++++++++++\'    
+add-content $logfile '     /++++++++++++/              \++++++++++++\'   
+add-content $logfile '    /++++++++++++/                \++++++++++++\'  
+add-content $logfile '   /++++++++++++/                  \++++++++++++\' 
+add-content $logfile '   \++++++++++++\                  /++++++++++++/' 
+add-content $logfile '    \++++++++++++\                /++++++++++++/' 
+add-content $logfile '     \++++++++++++\              /++++++++++++/'  
+add-content $logfile '      \++++++++++++\            /++++++++++++/'    
+add-content $logfile '       \++++++++++++\          /++++++++++++/'     
+add-content $logfile '        \++++++++++++\'                   
+add-content $logfile '         \++++++++++++\'                           
+add-content $logfile '          \++++++++++++\'                          
+add-content $logfile '           \++++++++++++\'                         
+add-content $logfile '            \------------\'
+add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v3.0'
+add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+. “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
-connect-viserver -Server $vcenter -username $vcuser -password $vcpass|out-null
-add-content $logfile "Connected to vCenter:"
-add-content $logfile $vcenter
-add-content $logfile "-------------------------"
 
-$hosts= get-cluster |get-vmhost
-$iops = 1 
-$iopsnumber=$iops
-$iops = "iops=" + $iops  
+if ((Get-PowerCLIVersion).build -lt 3737840)
+{
+    write-host "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)" -BackgroundColor Red
+    write-host "Found the following build number:"
+    write-host (Get-PowerCLIVersion).build
+    write-host "Terminating Script" -BackgroundColor Red
+    add-content $logfile "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)"
+    add-content $logfile "Found the following build number:"
+    add-content $logfile (Get-PowerCLIVersion).build
+    add-content $logfile "Terminating Script"
+    return
+}
 
-write-host "Iterating through all ESXi hosts..."
-write-host 
+try
+{
+    connect-viserver -Server $vcenter -username $vcuser -password $vcpass -ErrorAction Stop |out-null
+}
+catch
+{
+    write-host "Failed to connect to vCenter" -BackgroundColor Red
+    write-host $Error
+    write-host "Terminating Script" -BackgroundColor Red
+    add-content $logfile "Failed to connect to vCenter"
+    add-content $logfile $Error
+    add-content $logfile "Terminating Script"
+    return
+}
+add-content $logfile ('Connected to vCenter at ' + $vcenter)
+add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+$hosts= get-vmhost
+
+add-content $logfile "Iterating through all ESXi hosts..."
 
 #Iterating through each host in the vCenter
 foreach ($esx in $hosts) 
- {
-    $esxcli=get-esxcli -VMHost $esx
-    add-content $logfile "-----------------------------------------------"
-    add-content $logfile "-----------------------------------------------"
+{
+    $esxcli=get-esxcli -VMHost $esx -v2
+    add-content $logfile "-----------------------------------------------------------------------------------------------"
+    add-content $logfile "-----------------------------------------------------------------------------------------------"
     add-content $logfile "Working on the following ESXi host:"
     add-content $logfile $esx.NetworkInfo.hostname
-    write-host
-    write-host
-    write-host "==================================================================================="
-    write-host "******************************Next ESXi host***************************************"
-    write-host "==================================================================================="
-    write-host "Working on the following ESXi host:"
-    write-host $esx.NetworkInfo.HostName
-    write-host 
-    write-host "----------------------------------------------------------------------------------" 
-    write-host "Checking the VMware VAAI XCOPY Transfer size setting (recommended size is 16 MB)"
-    write-host 
-    $xfersize = $esx | Get-AdvancedSetting -Name DataMover.MaxHWTransferSize
-    write-host "The transfer size is currently set to " ($xfersize.value/1024) "MB."
-    if ($xfersize.value -ne 16384)
+    add-content $logfile "-----------------------------------------------"
+    if ($hostwidesettings -eq $true)
+    {
+        add-content $logfile "Checking host-wide setting for XCOPY and In-Guest UNMAP"
+        $xfersize = $esx | Get-AdvancedSetting -Name DataMover.MaxHWTransferSize
+        if ($xfersize.value -ne 16384)
         {
-            write-host "The transfer size is set to an amount that differs from best practices. Changing setting to 16 MB..."
+            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is incorrect:"
+            add-content $logfile $xfersize.value
+            add-content $logfile "This should be set to 16386 (16 MB). Changing to 16384..."
             $xfersize |Set-AdvancedSetting -Value 16384 -Confirm:$false |out-null
-            write-host "XCOPY transfer size is now 16 MB."
-            write-host 
-            add-content $logfile "The transfer size for this host is now 16 MB"
+            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is now 16 MB"
         }
-    else 
+        else 
         {
-            write-host "The XCOPY transfer size is set correctly and will not be altered."
-            write-host 
-            add-content $logfile "The transfer size for this host is correct at 16 MB and will not be altered"
+            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is correct at 16 MB and will not be altered."
         }
-    write-host "----------------------------------------------------------------------------------" 
-    write-host 
-    write-host "----------------------------------------------------------------------------------" 
-    write-host "Checking that the vSphere 6.0 In-Guest UNMAP setting EnableBlockDelete is enabled"
-    write-host
-    if ($esx.Version -like "6.0.*")
-    { 
-        $enableblockdelete = $esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete
-        if ($enableblockdelete.value -eq 1)
-        {
-            $ebdboolean = "enabled"
+        if ($esx.Version -like "6.0.*")
+        { 
+            $enableblockdelete = ($esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete).Value
+            if ($enableblockdelete.Value -eq 0)
+            {
+                add-content $logfile "EnableBlockDelete is currently disabled. Enabling..."
+                $enableblockdelete |Set-AdvancedSetting -Value 1 -Confirm:$false |out-null
+                add-content $logfile "EnableBlockDelete has been set to enabled."
+            }
+            else 
+            {
+                add-content $logfile "EnableBlockDelete for this host is correctly enabled and will not be altered."
+            }
         }
         else
         {
-            $ebdboolean = "disabled"
+            add-content $logfile "The current host is not version 6.0. Skipping EnableBlockDelete check."
         }
-
-        write-host "EnableBlockDelete is currently set to" $ebdboolean
-        if ($enableblockdelete.value -ne 1)
-            {
-                write-host "Changing setting to enabled..."
-                $enableblockdelete |Set-AdvancedSetting -Value 1 -Confirm:$false |out-null
-                write-host "EnableBlockDelete is now enabled."
-                write-host 
-                add-content $logfile "EnableBlockDelete has been set to enabled."
-            }
-        else 
-            {
-                write-host "No change to EnableBlockDelete is necessary."
-                write-host 
-                add-content $logfile "No change to EnableBlockDelete is necessary."
-            }
     }
     else
     {
-        write-host "The current host is not version 6.0. Skipping EnableBlockDelete check."
-        add-content $logfile "The current host is not version 6.0. Skipping EnableBlockDelete check."
+        add-content $logfile "Not checking host wide settings for XCOPY and In-Guest UNMAP due to in-script override"
     }
-    write-host "----------------------------------------------------------------------------------" 
-    write-host 
-    write-host "Looking for Storage Array Type Plugin (SATP) rules for Pure Storage FlashArray devices..."
-    $rule = $esxcli.storage.nmp.satp.rule.list() |where-object {$_.Vendor -eq "PURE"}
-    if ($rule.Count -eq 1) 
+    add-content $logfile "-----------------------------------------------"
+    $rules = $esxcli.storage.nmp.satp.rule.list.invoke() |where-object {$_.Vendor -eq "PURE"}
+    $correctrule = 0
+    $iopsoption = "iops=" + $iopsvalue
+    if ($rules.Count -ge 1)
+    {
+        add-content $logfile "Found the following existing Pure Storage SATP rules"
+        $rules | out-string | add-content $logfile
+        add-content $logfile "-----------------------------------------------"
+        foreach ($rule in $rules)
         {
-            write-host "An existing SATP rule for the Pure Storage FlashArray has been found."
-            write-host 
+            add-content $logfile "-----------------------------------------------"
+            add-content $logfile "Checking the following existing rule:"
+            $rule | out-string | add-content $logfile
             $issuecount = 0
             if ($rule.DefaultPSP -eq "VMW_PSP_RR") 
-                {
-                    write-host "The existing Pure/FlashArray rule is configured with the correct Path Selection Policy (Round Robin)"
-                    add-content $logfile "The existing Pure/FlashArray rule is configured with the correct Path Selection Policy (Round Robin)"
-                }
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is configured with the correct Path Selection Policy:"
+                add-content $logfile $rule.DefaultPSP
+            }
             else 
-                {
-                    write-host "The existing Pure/FlashArray rule is NOT configured with the correct Path Selection Policy"
-                    write-host "The existing rule should be configured to Round Robin"
-                    add-content $logfile "The existing Pure/FlashArray rule is NOT configured with the correct Path Selection Policy"
-                    add-content $logfile "The existing rule should be configured to Round Robin"
-                    $issuecount = 1
-                }
-            if ($rule.PSPOptions -like "*$iops*") 
-                {
-                    write-host "The existing Pure/FlashArray rule is configured with the correct IO Operations Limit"
-                    add-content $logfile "The existing Pure/FlashArray rule is configured with the correct IO Operations Limit"
-                }
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is NOT configured with the correct Path Selection Policy:"
+                add-content $logfile $rule.DefaultPSP
+                add-content $logfile "The rule should be configured to Round Robin (VMW_PSP_RR)"
+                $issuecount = 1
+            }
+            if ($rule.PSPOptions -eq $iopsoption) 
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is configured with the correct IO Operations Limit:"
+                add-content $logfile $rule.PSPOptions
+            }
             else 
-                {
-                    write-host "The existing Pure/FlashArray rule is NOT configured with the proper IO Operations Limit (should be 1)"
-                    write-host "The current rule has the following PSP options:"
-                    write-host $rule.PSPOptions
-                    add-content $logfile "The existing Pure/FlashArray rule is NOT configured with the as-entered IO Operations Limit (should be 1)"
-                    add-content $logfile "The current rule has the following PSP options:"
-                    add-content $logfile $rule.PSPOptions
-                    $issuecount = $issuecount + 1
-                    write-host 
-                } 
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is NOT configured with the correct IO Operations Limit:"
+                add-content $logfile $rule.PSPOptions
+                add-content $logfile "The rule should be configured to an IO Operations Limit of $iopsvalue"
+                $issuecount = $issuecount + 1
+            } 
+            if ($rule.Model -eq "FlashArray") 
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is configured with the correct model:"
+                add-content $logfile $rule.Model
+            }
+            else 
+            {
+                add-content $logfile "The existing Pure Storage FlashArray rule is NOT configured with the correct model:"
+                add-content $logfile $rule.Model
+                add-content $logfile "The rule should be configured with the model of FlashArray"
+                $issuecount = $issuecount + 1
+            } 
             if ($issuecount -ge 1)
-                {
-
-                    $esxcli.storage.nmp.satp.rule.remove($null, $null, $rule.Description, $null, $null, $rule.Model, $null, $rule.DefaultPSP, $rule.PSPOptions, "VMW_SATP_ALUA", $null, $null, "PURE") |Out-Null
-                    write-host "Rule deleted."
-                    $esxcli.storage.nmp.satp.rule.add($null, $null, "PURE FlashArray IO Operation Limit Rule", $null, $null, $null, "FlashArray", $null, "VMW_PSP_RR", $iops, "VMW_SATP_ALUA", $null, $null, "PURE") |out-null
-                    write-host "New rule created:"
-                    add-content $logfile "New rule created:"
-                    $newrule = $esxcli.storage.nmp.satp.rule.list() |where-object {$_.Vendor -eq "PURE"}
-                    $newrule
-                    $newrule | out-file tempfile.file
-                    $temprule = get-content tempfile.file
-                    rm tempfile.file
-                    add-content $logfile $temprule
-                 }
-        }
-            elseif ($rule.Count -ge 2)
-                {
-                    write-host "-------------------------------------------------------------------------------------------------------------------------------------------"
-                    write-host "***NOTICE***: Multiple Pure Storage rules or multiple errors in one rule have been found and this will require manual cleanup."
-                    write-host
-                    write-host "Please examine your rules and delete unnecessary ones. No rule will be created. Doing per-volume check only."
-                    write-host "-------------------------------------------------------------------------------------------------------------------------------------------" 
-                    add-content $logfile "***NOTICE***: Multiple Pure Storage rules or multiple errors in one rule have been found and this will require manual cleanup."
-                    add-content $logfile "Please examine your rules and delete unnecessary ones. No rule will be created. Doing per-volume check only."
-                }
+            {
+                $satpArgs = $esxcli.storage.nmp.satp.rule.remove.createArgs()
+                $satpArgs.model = $rule.Model
+                $satpArgs.vendor = "PURE"
+                $satpArgs.satp = $rule.Name
+                $satpArgs.psp = $rule.DefaultPSP
+                $satpArgs.pspoption = $rule.PSPOptions
+                add-content $logfile "This rule is incorrect, deleting..."
+                $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
+                add-content $logfile "*****NOTE: Deleted the rule.*****"
+                add-content $logfile "-----------------------------------------------"
+            }
             else
-                {  
-                    write-host "No default SATP rule for the Pure Storage FlashArray found. Creating a new rule to set Round Robin and a IO Operation Limit of" $iops 
-                    add-content $logfile "No default SATP rule for the Pure Storage FlashArray found. Creating a new rule to set Round Robin and the entered IO Operations Limit"
-                    $esxcli.storage.nmp.satp.rule.add($null, $null, "PURE FlashArray IO Operation Limit Rule", $null, $null, $null, "FlashArray", $null, "VMW_PSP_RR", $iops, "VMW_SATP_ALUA", $null, $null, "PURE") |out-null
-                    write-host "New rule created:"
-                    add-content $logfile "New rule created:"
-                    $newrule = $esxcli.storage.nmp.satp.rule.list() |where-object {$_.Vendor -eq "PURE"}
-                    $newrule
-                    $newrule | out-file tempfile.file
-                    $temprule = get-content tempfile.file
-                    rm tempfile.file
-                    add-content $logfile $temprule
- }
-                write-host "----------------------------------------------------------------------------------" 
-                
-                $devices = $esx |Get-ScsiLun -CanonicalName "naa.624a9370*"
-                if ($devices.count -ge 1) 
-                   {
-                        write-host
-                        write-host "Looking for existing Pure Storage volumes on this host"
-                        add-content $logfile "Looking for existing Pure Storage volumes on this host"
-                        write-host "Found " $devices.count " existing Pure Storage volumes on this host. Checking and fixing their multipathing configuration now."
-                        add-content $logfile "Found the following number of existing Pure Storage volumes on this host. Checking and fixing their multipathing configuration now."
-                        add-content $logfile $devices.count
-                        foreach ($device in $devices)
-                           {
-                               write-host
-                               write-host "----------------------------------"
-                               write-host "Checking device " $device "..."
-                               write-host
-                               if ($device.MultipathPolicy -ne "RoundRobin")
-                                    {
-                                       write-host "This device does not have the correct Path Selection Policy. Setting to Round Robin..."
-                                       add-content $logfile "This device does not have the correct Path Selection Policy. Setting to Round Robin..."
-                                       add-content $logfile $device.CanonicalName
-                                       Get-VMhost $esx |Get-ScsiLun $device |Set-ScsiLun -MultipathPolicy RoundRobin 
-                                    }
-                               else
-                                    {
-                                       write-host "This device's Path Selection Policy is correctly set to Round Robin already. No need to change."
-                                    }
-                               $deviceconfig = $esxcli.storage.nmp.psp.roundrobin.deviceconfig.get($device)
-                               if ($deviceconfig.IOOperationLimit -ne $iopsnumber)
-                                    {
-                                        write-host "This device's IO Operation Limit is not set to the entered value."
-                                        write-host "The IO Operation Limit for this device is currently set to " $deviceconfig.IOOperationLimit " Setting it to " $iopsnumber " now..."
-                                        add-content $logfile $device.CanonicalName
-                                        add-content $logfile "This device's IO Operation Limit is not set to the entered value. Changing..."
-                                        $esxcli.storage.nmp.psp.roundrobin.deviceconfig.set($null,$null,$device.CanonicalName,$iopsnumber,”iops”,$null) |out-null
-                                    }
-                               else
-                                    {
-                                        write-host "This device's IO Operation Limit matches the value entered. No need to change."
-                                    }
-                            }
-                 }
-              else
-                  {
-                      write-host "No existing Pure Storage volumes found on this host."
-                      add-content $logfile "No existing Pure Storage volumes found on this host."
-                  }
-     }
+            {
+                add-content $logfile "This rule is correct"
+                add-content $logfile "-----------------------------------------------"
+                $correctrule = 1
+            }
+        }
+    }
+    if ($correctrule -eq 0)
+    {  
+        add-content $logfile "No correct SATP rule for the Pure Storage FlashArray is found. Creating a new rule to set Round Robin and an IO Operations Limit of $iopsvalue"
+        $satpArgs.description = "Pure Storage FlashArray SATP Rule"
+        $satpArgs.model = "FlashArray"
+        $satpArgs.vendor = "PURE"
+        $satpArgs.satp = "VMW_SATP_ALUA"
+        $satpArgs.psp = "VMW_PSP_RR"
+        $satpArgs.pspoption = $iopsoption
+        $result = $esxcli.storage.nmp.satp.rule.add.invoke($satpArgs)
+        if ($result -eq $true)
+        {
+            add-content $logfile "New rule created:"
+            $newrule = $esxcli.storage.nmp.satp.rule.list.invoke() |where-object {$_.Vendor -eq "PURE"}
+            $newrule | out-string | add-content $logfile
+        }
+        else
+        {
+            add-content $logfile "ERROR: The rule failed to create. Manual intervention might be required."
+        }
+    }
+    else 
+    {
+        add-content $logfile "A correct SATP rule for the FlashArray exists. No need to create a new one on this host."
+    }
+    $devices = $esx |Get-ScsiLun -CanonicalName "naa.624a9370*"
+    add-content $logfile "-----------------------------------------------"
+    if ($devices.count -ge 1) 
+    {
+        add-content $logfile "Looking for existing Pure Storage volumes on this host"
+        add-content $logfile "Found the following number of existing Pure Storage volumes on this host."
+        add-content $logfile $devices.count
+        add-content $logfile "Checking and fixing their multipathing configuration now."
+        add-content $logfile "-----------------------------------------------"
+        foreach ($device in $devices)
+        {
+            add-content $logfile "Found and examining the following FlashArray device:" 
+            add-content $logfile $device.CanonicalName
+            if ($device.MultipathPolicy -ne "RoundRobin")
+            {
+                add-content $logfile "This device does not have the correct Path Selection Policy, it is set to:"
+                add-content $logfile $device.MultipathPolicy
+                add-content $logfile "Changing to Round Robin."
+                Get-VMhost $esx |Get-ScsiLun $device |Set-ScsiLun -MultipathPolicy RoundRobin 
+            }
+            else
+            {
+                add-content $logfile "This device's Path Selection Policy is correctly set to Round Robin. No need to change."
+            }
+            $deviceargs = $esxcli.storage.nmp.psp.roundrobin.deviceconfig.get.createargs()
+            $deviceargs.device = $device.CanonicalName
+            $deviceconfig = $esxcli.storage.nmp.psp.roundrobin.deviceconfig.get.invoke($deviceargs)
+            $nmpargs =  $esxcli.storage.nmp.psp.roundrobin.deviceconfig.set.createargs()
+            $nmpargs.iops = $iopsvalue
+            $nmpargs.type = "iops"
+            if ($deviceconfig.IOOperationLimit -ne $iopsvalue)
+            {
+                add-content $logfile "The current IO Operation limit for this device is:"
+                add-content $logfile $deviceconfig.IOOperationLimit
+                add-content $logfile "This device's IO Operation Limit is unset or is not set to the value of $iopsvalue. Changing..."
+                $nmpargs.device = $device.CanonicalName
+                $esxcli.storage.nmp.psp.roundrobin.deviceconfig.set.invoke($nmpargs) |out-null
+            }
+            else
+            {
+                add-content $logfile "This device's IO Operation Limit matches the value of $iopsvalue. No need to change."
+            }
+            add-content $logfile "-------------------"
+        }
+    }
+    else
+    {
+        add-content $logfile "No existing Pure Storage volumes found on this host."
+    }
+}
  disconnect-viserver -Server $vcenter -confirm:$false
+ add-content $logfile "Disconnected vCenter connection"
