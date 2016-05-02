@@ -48,7 +48,7 @@ For info, refer to www.codyhosterman.com
 #Create log folder if non-existent
 If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
 $logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "setbestpractices.txt"
-write-host "Checking and setting Pure Storage FlashArray Best Practices for VMWare on the ESXi hosts in this vCenter. No further information is printed to the screen."
+write-host "Checking and setting Pure Storage FlashArray Best Practices for VMware on the ESXi hosts in this vCenter. No further information is printed to the screen."
 write-host "Script log information can be found at $logfile"
 
 add-content $logfile '             __________________________'
@@ -277,7 +277,7 @@ foreach ($esx in $hosts)
                 add-content $logfile "This device does not have the correct Path Selection Policy, it is set to:"
                 add-content $logfile $device.MultipathPolicy
                 add-content $logfile "Changing to Round Robin."
-                Get-VMhost $esx |Get-ScsiLun $device |Set-ScsiLun -MultipathPolicy RoundRobin 
+                Get-VMhost $esx |Get-ScsiLun $device |Set-ScsiLun -MultipathPolicy RoundRobin |out-null
             }
             else
             {
