@@ -126,6 +126,7 @@ foreach ($esx in $hosts)
     add-content $logfile "-----------------------------------------------------------------------------------------------"
     add-content $logfile "Working on the following ESXi host:"
     add-content $logfile $esx.NetworkInfo.hostname
+    add-content $logfile $esx.Version
     add-content $logfile "-----------------------------------------------------------------------------------------------"
     if ($hostwidesettings -eq $true)
     {
