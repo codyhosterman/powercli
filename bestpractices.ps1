@@ -72,7 +72,7 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v3.0'
+add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v3.1'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
@@ -237,6 +237,7 @@ foreach ($esx in $hosts)
     if ($correctrule -eq 0)
     {  
         add-content $logfile "No correct SATP rule for the Pure Storage FlashArray is found. Creating a new rule to set Round Robin and an IO Operations Limit of $iopsvalue"
+        $satpArgs = $esxcli.storage.nmp.satp.rule.remove.createArgs()
         $satpArgs.description = "Pure Storage FlashArray SATP Rule"
         $satpArgs.model = "FlashArray"
         $satpArgs.vendor = "PURE"
