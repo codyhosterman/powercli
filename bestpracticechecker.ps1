@@ -1,9 +1,9 @@
 ﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
 #Put all entries inside the quotes:
 #**********************************
-$vcenter = ''
-$vcuser = ''
-$vcpass = ''
+$vcenter = ""
+$vcuser = ""
+$vcpass = ""
 $logfolder = "C:\folder\folder\etc\"
 #**********************************
 
@@ -159,7 +159,7 @@ foreach ($esx in $hosts)
         {
             add-content $logfile "The VAAI ATOMIC TEST & SET (Assisted Locking) feature is correctly enabled on this host."
         }
-        if ($esx.Build -ge 2068190)
+        if (($datastore -ne $null) -and (($esx.version -like ("5.5.*")) -or ($esx.version -like ("6.*"))))
         { 
             $atsheartbeat = $esx | Get-AdvancedSetting -Name VMFS3.useATSForHBOnVMFS5
             if ($atsheartbeat.value -eq 0)
@@ -467,7 +467,7 @@ foreach ($esx in $hosts)
                 $paths = ($device |get-scsilunpath).count
             }
             $datastore = $esx |Get-Datastore |where-object { $_.ExtensionData.Info.Vmfs.Extent.DiskName -eq $device.CanonicalName }
-            if ($datastore -ne $null)
+            if (($datastore -ne $null) -and ($esx.version -like ("6.*")))
             {
                 $vmfsargs = $esxcli.storage.vmfs.lockmode.list.CreateArgs()
                 $vmfsargs.volumelabel = $datastore.name
@@ -490,7 +490,7 @@ foreach ($esx in $hosts)
                     PSP = $psp 
                     IOPSValue  = if ($device.MultipathPolicy -eq "RoundRobin"){$iops}else {"N/A"}
                     PathCount  = $paths
-                    ATSMode = if ($datastore -ne $null) {$ATS}else{"N/A"}
+                    ATSMode = if (($datastore -ne $null) -and ($esx.version -like ("6.*"))) {$ATS}else{"N/A"}
                    }
                 $devstofix += $devtofix
             }
