@@ -77,109 +77,114 @@ add-content $logfile '            \------------\'
 add-content $logfile 'Pure Storage VMware ESXi Host Group Creation Script v2.0'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-
-
-#Connect to FlashArray via REST
 $facount=0
 $EndPoint= @()
 $Pwd = ConvertTo-SecureString $pureuserpwd -AsPlainText -Force
 $Creds = New-Object System.Management.Automation.PSCredential ($pureuser, $pwd)
 write-host "Script information can be found at $logfile" -ForegroundColor Green
 
-<#
-Connect to FlashArray via REST with the SDK
-Creates an array of connections for as many FlashArrays as you have entered into the $flasharrays variable. 
-Assumes the same credentials are in use for every FlashArray
-#>
-
-foreach ($flasharray in $flasharrays)
+if (($protocol -ne "FC") -or ($protocol -ne "iSCSI"))
 {
-    if ($facount -eq 0)
+    add-content $logfile 'No valid protocol entered. Please make sure $protocol is set to either "FC" or "iSCSI"'
+    write-host ( 'No valid protocol entered. Please make sure $protocol is set to either "FC" or "iSCSI"') -BackgroundColor Red
+}
+else
+{
+
+    <#
+    Connect to FlashArray via REST with the SDK
+    Creates an array of connections for as many FlashArrays as you have entered into the $flasharrays variable. 
+    Assumes the same credentials are in use for every FlashArray
+    #>
+
+    foreach ($flasharray in $flasharrays)
     {
-        try
+        if ($facount -eq 0)
         {
-            $EndPoint += (New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError -ErrorAction stop)
+            try
+            {
+                $EndPoint += (New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError -ErrorAction stop)
+            }
+            catch
+            {
+                write-host ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN") -BackgroundColor Red
+                write-host $Error[0]
+                write-host "Terminating Script" -BackgroundColor Red
+                add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
+                add-content $logfile $Error[0]
+                add-content $logfile "Terminating Script" 
+                return
+            }
         }
-        catch
+        else
         {
-            write-host ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN") -BackgroundColor Red
-            write-host $Error[0]
-            write-host "Terminating Script" -BackgroundColor Red
-            add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
-            add-content $logfile $Error[0]
-            add-content $logfile "Terminating Script" 
-            return
+            try
+            {
+                $EndPoint += New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError
+            }
+            catch
+            {
+                write-host ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN") -BackgroundColor Red
+                write-host $Error[0]
+                add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
+                add-content $logfile $Error[0]
+                return
+            }
         }
+        $facount = $facount + 1
     }
-    else
+
+    add-content $logfile 'Connected to the following FlashArray(s):'
+    add-content $logfile $flasharrays
+    add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+    #Important PowerCLI if not done and connect to vCenter. 
+
+    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+    . "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" 
+    }
+    Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
+    Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
+    if ((Get-PowerCLIVersion).build -lt 3737840)
     {
-        try
-        {
-            $EndPoint += New-PfaArray -EndPoint $flasharray -Credentials $Creds -IgnoreCertificateError
-        }
-        catch
-        {
-            write-host ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN") -BackgroundColor Red
-            write-host $Error[0]
-            add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
-            add-content $logfile $Error[0]
-            return
-        }
+        write-host "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)" -BackgroundColor Red
+        write-host "Found the following build number:"
+        write-host (Get-PowerCLIVersion).build
+        write-host "Terminating Script" -BackgroundColor Red
+        write-host "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
+        add-content $logfile "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)"
+        add-content $logfile "Found the following build number:"
+        add-content $logfile (Get-PowerCLIVersion).build
+        add-content $logfile "Terminating Script"
+        add-content $logfile "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
+        return
     }
-    $facount = $facount + 1
+
+    try
+    {
+        connect-viserver -Server $vcenter -username $vcuser -password $vcpass -ErrorAction Stop |out-null
+    }
+    catch
+    {
+        write-host "Failed to connect to vCenter" -BackgroundColor Red
+        write-host $vcenter
+        write-host $Error[0]
+        write-host "Terminating Script" -BackgroundColor Red
+        add-content $logfile "Failed to connect to vCenter"
+        add-content $logfile $vcenter
+        add-content $logfile $Error[0]
+        add-content $logfile "Terminating Script"
+        return
+    }
+
+    write-host "No further information is printed to the screen."
+    add-content $logfile ('Connected to vCenter at ' + $vcenter)
+    add-content $logfile '----------------------------------------------------------------------------------------------------'
+
+    #Instantiate Cluster and Host variables
+    $esxicluster = get-cluster $cluster
+    $esxihosts = $esxicluster | Get-VMHost
 }
-
-add-content $logfile 'Connected to the following FlashArray(s):'
-add-content $logfile $flasharrays
-add-content $logfile '----------------------------------------------------------------------------------------------------'
-
-#Important PowerCLI if not done and connect to vCenter. 
-
-if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
-. "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" 
-}
-Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
-Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
-if ((Get-PowerCLIVersion).build -lt 3737840)
-{
-    write-host "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)" -BackgroundColor Red
-    write-host "Found the following build number:"
-    write-host (Get-PowerCLIVersion).build
-    write-host "Terminating Script" -BackgroundColor Red
-    write-host "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
-    add-content $logfile "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)"
-    add-content $logfile "Found the following build number:"
-    add-content $logfile (Get-PowerCLIVersion).build
-    add-content $logfile "Terminating Script"
-    add-content $logfile "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
-    return
-}
-
-try
-{
-    connect-viserver -Server $vcenter -username $vcuser -password $vcpass -ErrorAction Stop |out-null
-}
-catch
-{
-    write-host "Failed to connect to vCenter" -BackgroundColor Red
-    write-host $vcenter
-    write-host $Error[0]
-    write-host "Terminating Script" -BackgroundColor Red
-    add-content $logfile "Failed to connect to vCenter"
-    add-content $logfile $vcenter
-    add-content $logfile $Error[0]
-    add-content $logfile "Terminating Script"
-    return
-}
-
-write-host "No further information is printed to the screen."
-add-content $logfile ('Connected to vCenter at ' + $vcenter)
-add-content $logfile '----------------------------------------------------------------------------------------------------'
-
-#Instantiate Cluster and Host variables
-$esxicluster = get-cluster $cluster
-$esxihosts = $esxicluster | Get-VMHost
-
 #-----------------------------------------------------------------------------------------------------------------------------------------------------------
 #Configure the VMware cluster as a new host group on the FlashArray. Using the cluster name as the host group name.
 #-----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -302,7 +307,7 @@ foreach ($flasharray in $endpoint)
                     {
                         Add-PfaHosts -Array $flasharray -Name $clustername -hoststoadd $newfahost.name |Out-Null
                     }
-                    Get-PfaHostGroup -Name $clustername | out-string | add-content $logfile
+                    Get-PfaHostGroup -Array $flasharray -Name $clustername | out-string | add-content $logfile
                 }
             }
         }
