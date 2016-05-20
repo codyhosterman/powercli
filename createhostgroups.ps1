@@ -264,6 +264,7 @@ foreach ($flasharray in $endpoint)
                 if ($iscsiadapter -eq $null)
                 {
                     add-content $logfile ("No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
+                    write-host ("No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.") -BackgroundColor Red
                     disconnectFlashArray
                     disconnectvCenter
                     return
@@ -422,7 +423,10 @@ foreach ($flasharray in $endpoint)
                 if ($wwns -eq $null)
                 {
                     add-content $logfile ("No FC WWNs found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
-                    exit
+                    write-host  ("No FC WWNs found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.") -BackgroundColor Red
+                    disconnectFlashArray
+                    disconnectvCenter
+                    return
                 }
                 else
                 {
