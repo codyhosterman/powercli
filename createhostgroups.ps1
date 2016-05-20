@@ -74,16 +74,18 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage VMware ESXi Host Group Creation Script v2.0'
+add-content $logfile 'Pure Storage VMware ESXi Host Group Creation Script v2.1'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 $facount=0
 $EndPoint= @()
+$failedFAs = @()
+$successfulFAs = @()
 $Pwd = ConvertTo-SecureString $pureuserpwd -AsPlainText -Force
 $Creds = New-Object System.Management.Automation.PSCredential ($pureuser, $pwd)
 write-host "Script information can be found at $logfile" -ForegroundColor Green
 
-if (($protocol -ne "FC") -or ($protocol -ne "iSCSI"))
+if (($protocol -ne "FC") -and ($protocol -ne "iSCSI"))
 {
     add-content $logfile 'No valid protocol entered. Please make sure $protocol is set to either "FC" or "iSCSI"'
     write-host ( 'No valid protocol entered. Please make sure $protocol is set to either "FC" or "iSCSI"') -BackgroundColor Red
@@ -177,7 +179,6 @@ else
         return
     }
 
-    write-host "No further information is printed to the screen."
     add-content $logfile ('Connected to vCenter at ' + $vcenter)
     add-content $logfile '----------------------------------------------------------------------------------------------------'
 
@@ -190,63 +191,131 @@ else
 #-----------------------------------------------------------------------------------------------------------------------------------------------------------
 foreach ($flasharray in $endpoint)
 {
+    $hostgroupfailed = $false
     if ($protocol -eq "iSCSI")
     {
         add-content $logfile "-------------------------------------------------------------------"
+        add-content $logfile ("")
+        add-content $logfile ("*********************************************************")
         add-content $logfile ("Creating host group on FlashArray " + $flasharray.endpoint)
         add-content $logfile "Configuring iSCSI host group"
-        $fahosts = Get-PFAHosts -array $flasharray
-        $fahostgroups = Get-PFAHostGroups -array $flasharray
-        $iqnexist = $false
-        foreach ($esxihost in $esxihosts)
+        add-content $logfile ("*********************************************************")
+        add-content $logfile ("")
+        add-content $logfile ("Verifying that the initiators do not currently exist on the FlashArray")
+        try
         {
-            add-content $logfile $esxihost.NetworkInfo.HostName
-            $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
-            if ($iscsiadapter -eq $null)
+            $fahosts = Get-PFAHosts -array $flasharray -ErrorAction Stop
+            $fahostgroups = Get-PFAHostGroups -array $flasharray -ErrorAction Stop
+        }
+        catch
+        {
+            add-content $logfile ("")
+            add-content $logfile ("********ERROR********")
+            add-content $logfile ("Could not obtain host information from the FlashArray. Check FlashArray for errors. Skipping the FlashArray named " + $flasharray.endpoint)
+        } 
+        $iqnexist = $false
+        if ($hostgroupfailed -eq $false)
+        {
+            foreach ($esxihost in $esxihosts)
             {
-                add-content $logfile ("No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
-                exit
-            }
-            else
-            {
-                $iqn = $iscsiadapter.ExtensionData.IScsiName
-                foreach ($esxi in $fahosts)
+                add-content $logfile ("Looking at the following host")
+                add-content $logfile $esxihost.NetworkInfo.HostName
+                $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
+                if ($iscsiadapter -eq $null)
                 {
-                    if ($esxi.iqn.count -ge 1)
+                    add-content $logfile ("No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
+                    exit
+                }
+                else
+                {
+                    $iqn = $iscsiadapter.ExtensionData.IScsiName
+                    foreach ($esxi in $fahosts)
                     {
-                        foreach($fahostiqn in $esxi.iqn)
+                        add-content $logfile ("Found " + $iqn.Count + " IQN initiator:" )
+                        $iqn | out-string | add-content $logfile
+                        if ($esxi.iqn.count -ge 1)
                         {
-                            if ($iqn.ToLower() -eq $fahostiqn.ToLower())
+                            foreach($fahostiqn in $esxi.iqn)
                             {
-                                add-content $logfile ("The ESXi IQN " + $iqn + " exists on the FlashArray.")
-                                $iqnexist = $true
+                                if ($iqn.ToLower() -eq $fahostiqn.ToLower())
+                                {
+                                    add-content $logfile ("********ERROR********")
+                                    add-content $logfile ("The ESXi IQN " + $iqn + " exists on the FlashArray.")
+                                    $hostgroupfailed = $true
+                                    $iqnexist = $true
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        if ($iqnexist -eq $true)
-        {
-            add-content $logfile ("ESXi host's IQNs have been found on this FlashArray. Skipping the FlashArray named " + $flasharray.endpoint)
-        }
-        else
-        {
-            $createhostfail = $false
-            $newfahosts = @()
-            foreach ($esxihost in $esxihosts)
+            if ($iqnexist -eq $true)
             {
+                add-content $logfile ("ESXi host's IQNs have been found on this FlashArray. Skipping the FlashArray named " + $flasharray.endpoint)
+            }
+            else
+            {
+                $createhostfail = $false
+                $newfahosts = @()
+                foreach ($esxihost in $esxihosts)
+                {
+                    if ($createhostfail -eq $false)
+                    {
+                        $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
+                        $iqn = $iscsiadapter.ExtensionData.IScsiName
+                        try
+                        {
+                            $newfahosts += New-PfaHost -Array $flasharray -Name $esxihost.NetworkInfo.HostName -IqnList $iqn -ErrorAction stop
+                        }
+                        catch
+                        {
+                            add-content $logfile ("********ERROR********")
+                            add-content $logfile ("The host " + $esxihost.NetworkInfo.HostName + " failed to create. Review error. Cleaning up this FlashArray and moving on.")
+                            $hostgroupfailed = $true
+                            add-content $logfile $error[0]
+                            $createhostfail = $true
+                            if ($newfahosts.count -ge 1)
+                            {
+                                add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
+                                foreach ($removehost in $newfahosts)
+                                {
+                                    Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
+                                    add-content $logfile ("Removed host " + $removehost.Name)
+                                }
+                            }
+                        }
+                    }
+                }
                 if ($createhostfail -eq $false)
                 {
-                    $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
-                    $iqn = $iscsiadapter.ExtensionData.IScsiName
+                    add-content $logfile "Created the following hosts"
+                    foreach ($newhost in $newfahosts)
+                    {
+                        Get-PfaHost -Array $flasharray -Name $newhost.name | out-string | add-content $logfile
+                    }
+                    #FlashArray only supports Alphanumeric or the dash - character in host group names. Checking for VMware cluster name compliance and removing invalid characters.
+                    if ($cluster -match "^[a-zA-Z0-9\-]+$")
+                    {
+                        $clustername = $cluster
+                    }
+                    else
+                    {
+                        $clustername = $cluster -replace "[^\w\-]", ""
+                        $clustername = $clustername -replace "[_]", ""
+                    }
+                    add-content $logfile "Creating the host group"
+                    $clustersuccess = $false
                     try
                     {
-                        $newfahosts += New-PfaHost -Array $flasharray -Name $esxihost.NetworkInfo.HostName -IqnList $iqn -ErrorAction stop
+                        $newcluster = New-PfaHostGroup -Array $flasharray -Name $clustername -ErrorAction stop
+                        $newcluster | out-string | add-content $logfile
+                        $clustersuccess = $true
                     }
                     catch
                     {
-                        add-content $logfile ("The host " + $esxihost.NetworkInfo.HostName + " failed to create. Review error. Cleaning up this FlashArray and moving on.")
+                        add-content $logfile ("********ERROR********")
+                        add-content $logfile ("The host group " + $clustername + " failed to create. Review error below. Cleaning up this FlashArray and moving on.")
+                        $hostgroupfailed = $true
                         add-content $logfile $error[0]
                         if ($newfahosts.count -ge 1)
                         {
@@ -255,59 +324,18 @@ foreach ($flasharray in $endpoint)
                             {
                                 Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
                                 add-content $logfile ("Removed host " + $removehost.Name)
-                                $createhostfail = $true
                             }
                         }
                     }
-                }
-            }
-            if ($createhostfail -eq $false)
-            {
-                add-content $logfile "Created the following hosts"
-                foreach ($newhost in $newfahosts)
-                {
-                    Get-PfaHost -Array $flasharray -Name $newhost.name | out-string | add-content $logfile
-                }
-                #FlashArray only supports Alphanumeric or the dash - character in host group names. Checking for VMware cluster name compliance and removing invalid characters.
-                if ($cluster -match "^[a-zA-Z0-9\-]+$")
-                {
-                    $clustername = $cluster
-                }
-                else
-                {
-                    $clustername = $cluster -replace "[^\w\-]", ""
-                    $clustername = $clustername -replace "[_]", ""
-                }
-                add-content $logfile "Creating the host group"
-                $clustersuccess = $false
-                try
-                {
-                    $newcluster = New-PfaHostGroup -Array $flasharray -Name $clustername -ErrorAction stop
-                    $newcluster | out-string | add-content $logfile
-                    $clustersuccess = $true
-                }
-                catch
-                {
-                    add-content $logfile ("The host group " + $clustername + " failed to create. Review error below. Cleaning up this FlashArray and moving on.")
-                    add-content $logfile $error[0]
-                    if ($newfahosts.count -ge 1)
+                    if ($clustersuccess -eq $true)
                     {
-                        add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
-                        foreach ($removehost in $newfahosts)
+                        add-content $logfile "Adding the hosts to the host group"
+                        foreach ($newfahost in $newfahosts)
                         {
-                            Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
-                            add-content $logfile ("Removed host " + $removehost.Name)
+                            Add-PfaHosts -Array $flasharray -Name $clustername -hoststoadd $newfahost.name |Out-Null
                         }
+                        Get-PfaHostGroup -Array $flasharray -Name $clustername | out-string | add-content $logfile
                     }
-                }
-                if ($clustersuccess -eq $true)
-                {
-                    add-content $logfile "Adding the hosts to the host group"
-                    foreach ($newfahost in $newfahosts)
-                    {
-                        Add-PfaHosts -Array $flasharray -Name $clustername -hoststoadd $newfahost.name |Out-Null
-                    }
-                    Get-PfaHostGroup -Array $flasharray -Name $clustername | out-string | add-content $logfile
                 }
             }
         }
@@ -315,75 +343,170 @@ foreach ($flasharray in $endpoint)
     elseif ($protocol -eq "FC")
     {
         add-content $logfile "-------------------------------------------------------------------"
+        add-content $logfile ("")
+        add-content $logfile ("*********************************************************")
         add-content $logfile ("Creating host group on FlashArray " + $flasharray.endpoint)
         add-content $logfile "Configuring Fibre Channel host group"
-        $fahosts = Get-PFAHosts -array $flasharray
-        $fahostgroups = Get-PFAHostGroups -array $flasharray
-        $wwnsexist = $false
-        foreach ($esxihost in $esxihosts)
+        add-content $logfile ("*********************************************************")
+        add-content $logfile ("")
+        add-content $logfile ("Verifying that the initiators do not currently exist on the FlashArray")
+        try
         {
-            add-content $logfile $esxihost.NetworkInfo.HostName
-            $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
-            $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
-            $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+            $fahosts = Get-PFAHosts -array $flasharray -ErrorAction Stop
+            $fahostgroups = Get-PFAHostGroups -array $flasharray -ErrorAction Stop
+        }
+        catch
+        {
+            add-content $logfile ("")
+            add-content $logfile ("********ERROR********")
+            add-content $logfile ("Could not obtain host information from the FlashArray. Check FlashArray for errors. Skipping the FlashArray named " + $flasharray.endpoint)
+            $hostgroupfailed = $true
+        }
+        $wwnsexist = $false
+        if ($hostgroupfailed -eq $false)
+        {
+            foreach ($esxihost in $esxihosts)
             {
-                 $wwns.substring($i,16)
-            }}
-            if ($wwns -eq $null)
-            {
-                add-content $logfile ("No FC WWNs found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
-                exit
-            }
-            else
-            {
-                foreach ($wwn in $wwns)
+                add-content $logfile ("")
+                add-content $logfile ("----------------------------------")
+                add-content $logfile ("Looking at the following host")
+                add-content $logfile $esxihost.NetworkInfo.HostName
+                $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+                $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
+                $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
                 {
-                    foreach ($esxi in $fahosts)
+                     $wwns.substring($i,16)
+                }}
+                if ($wwns -eq $null)
+                {
+                    add-content $logfile ("No FC WWNs found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
+                    exit
+                }
+                else
+                {
+                    add-content $logfile ("Found " + $wwns.Count + " initiator(s):" )
+                    $wwns | out-string | add-content $logfile
+                    foreach ($wwn in $wwns)
                     {
-                        if ($esxi.wwn.count -ge 1)
+                        foreach ($esxi in $fahosts)
                         {
-                            foreach($fahostwwn in $esxi.wwn)
+                            if ($esxi.wwn.count -ge 1)
                             {
-                                if ($wwn.ToLower() -eq $fahostwwn.ToLower())
+                                foreach($fahostwwn in $esxi.wwn)
                                 {
-                                    add-content $logfile ("The ESXi WWN " + $wwn + " exists on the FlashArray.")
-                                    $wwnsexist = $true
+                                    if ($wwn.ToLower() -eq $fahostwwn.ToLower())
+                                    {
+                                        add-content $logfile ("********ERROR********")
+                                        add-content $logfile ("The ESXi WWN " + $wwn + " exists on the FlashArray.")
+                                        $hostgroupfailed = $true
+                                        $wwnsexist = $true
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        if ($wwnsexist -eq $true)
-        {
-            add-content $logfile ("ESXi host's WWNs have been found on this FlashArray. Skipping the FlashArray named " + $flasharray.endpoint)
-        }
-        else
-        {
-            $createhostfail = $false
-            $newfahosts = @()
-            foreach ($esxihost in $esxihosts)
+            if ($wwnsexist -eq $true)
             {
+                add-content $logfile ""
+                add-content $logfile ("ESXi host's WWNs have been found on this FlashArray. Skipping the FlashArray named " + $flasharray.endpoint)
+            }
+            else
+            {
+                $createhostfail = $false
+                $createwwnfail = $false
+                $newfahosts = @()
+                foreach ($esxihost in $esxihosts)
+                {
+                    if ($createhostfail -eq $false)
+                    {
+                        $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+                        $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
+                        $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+                        {
+                             $wwns.substring($i,16)
+                        }}
+                        try
+                        {
+                            $newfahosts += New-PfaHost -Array $flasharray -Name $esxihost.NetworkInfo.HostName -ErrorAction stop
+                                foreach ($wwn in $wwns)
+                                {
+                                    if ($createhostfail -eq $false)   
+                                    {
+                                        try
+                                        {
+                                            Add-PfaHostWwns -Array $flasharray -Name $esxihost.NetworkInfo.HostName -AddWwnList $wwn -ErrorAction stop |out-null
+                                        }
+                                        catch
+                                        {
+                                            add-content $logfile ("********ERROR********")
+                                            add-content $logfile ("The WWN " + $wwn + " failed to add. Review error. Cleaning up this FlashArray and moving on.")
+                                            $hostgroupfailed = $true
+                                            add-content $logfile $error[0]
+                                            $createhostfail = $true
+                                            if ($newfahosts.count -ge 1)
+                                            {
+                                                add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
+                                                foreach ($removehost in $newfahosts)
+                                                {
+                                                    Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
+                                                    add-content $logfile ("Removed host " + $removehost.Name)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                        }
+                        catch
+                        {
+                            add-content $logfile ("********ERROR********")
+                            add-content $logfile ("The host " + $esxihost.NetworkInfo.HostName + " failed to create. Review error. Cleaning up this FlashArray and moving on.")
+                            $hostgroupfailed = $true
+                            add-content $logfile $error[0]
+                            $createhostfail = $true
+                            if ($newfahosts.count -ge 1)
+                            {
+                                add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
+                                foreach ($removehost in $newfahosts)
+                                {
+                                    Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
+                                    add-content $logfile ("Removed host " + $removehost.Name)
+                                }
+                            }
+                        }
+                    }
+                }
                 if ($createhostfail -eq $false)
                 {
-                    $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
-                    $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
-                    $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+                    add-content $logfile "Created the following hosts"
+                    foreach ($newhost in $newfahosts)
                     {
-                         $wwns.substring($i,16)
-                    }}
+                        Get-PfaHost -Array $flasharray -Name $newhost.name | out-string | add-content $logfile
+                    }
+                    #FlashArray only supports Alphanumeric or the dash - character in host group names. Checking for VMware cluster name compliance and removing invalid characters.
+                    if ($cluster -match "^[a-zA-Z0-9\-]+$")
+                    {
+                        $clustername = $cluster
+                    }
+                    else
+                    {
+                        $clustername = $cluster -replace "[^\w\-]", ""
+                        $clustername = $clustername -replace "[_]", ""
+                    }
+                    add-content $logfile "Creating the host group"
+                    $clustersuccess = $false
                     try
                     {
-                        $newfahosts += New-PfaHost -Array $flasharray -Name $esxihost.NetworkInfo.HostName -ErrorAction stop
-                        foreach ($wwn in $wwns)
-                        {
-                            Add-PfaHostWwns -Array $flasharray -Name $esxihost.NetworkInfo.HostName -AddWwnList $wwn |out-null
-                        }
+                        $newcluster = New-PfaHostGroup -Array $flasharray -Name $clustername -ErrorAction stop
+                        $newcluster | out-string | add-content $logfile
+                        $clustersuccess = $true
                     }
                     catch
                     {
-                        add-content $logfile ("The host " + $esxihost.NetworkInfo.HostName + " failed to create. Review error. Cleaning up this FlashArray and moving on.")
+                        add-content $logfile ("********ERROR********")
+                        add-content $logfile ("The host group " + $clustername + " failed to create. Review error below. Cleaning up this FlashArray and moving on.")
+                        $hostgroupfailed = $true
                         add-content $logfile $error[0]
                         if ($newfahosts.count -ge 1)
                         {
@@ -392,68 +515,57 @@ foreach ($flasharray in $endpoint)
                             {
                                 Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
                                 add-content $logfile ("Removed host " + $removehost.Name)
-                                $createhostfail = $true
                             }
                         }
                     }
-                }
-            }
-            if ($createhostfail -eq $false)
-            {
-                add-content $logfile "Created the following hosts"
-                foreach ($newhost in $newfahosts)
-                {
-                    Get-PfaHost -Array $flasharray -Name $newhost.name | out-string | add-content $logfile
-                }
-                #FlashArray only supports Alphanumeric or the dash - character in host group names. Checking for VMware cluster name compliance and removing invalid characters.
-                if ($cluster -match "^[a-zA-Z0-9\-]+$")
-                {
-                    $clustername = $cluster
-                }
-                else
-                {
-                    $clustername = $cluster -replace "[^\w\-]", ""
-                    $clustername = $clustername -replace "[_]", ""
-                }
-                add-content $logfile "Creating the host group"
-                $clustersuccess = $false
-                try
-                {
-                    $newcluster = New-PfaHostGroup -Array $flasharray -Name $clustername -ErrorAction stop
-                    $newcluster | out-string | add-content $logfile
-                    $clustersuccess = $true
-                }
-                catch
-                {
-                    add-content $logfile ("The host group " + $clustername + " failed to create. Review error below. Cleaning up this FlashArray and moving on.")
-                    add-content $logfile $error[0]
-                    if ($newfahosts.count -ge 1)
+                    if ($clustersuccess -eq $true)
                     {
-                        add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
-                        foreach ($removehost in $newfahosts)
+                        add-content $logfile "Adding the hosts to the host group"
+                        foreach ($newfahost in $newfahosts)
                         {
-                            Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
-                            add-content $logfile ("Removed host " + $removehost.Name)
+                            Add-PfaHosts -Array $flasharray -Name $clustername -hoststoadd $newfahost.name |Out-Null
                         }
+                        Get-PfaHostGroup -Array $flasharray -Name $clustername | out-string | add-content $logfile
                     }
-                }
-                if ($clustersuccess -eq $true)
-                {
-                    add-content $logfile "Adding the hosts to the host group"
-                    foreach ($newfahost in $newfahosts)
-                    {
-                        Add-PfaHosts -Array $flasharray -Name $clustername -hoststoadd $newfahost.name |Out-Null
-                    }
-                    Get-PfaHostGroup -Array $flasharray -Name $clustername | out-string | add-content $logfile
                 }
             }
         }
     }
+    if ($hostgroupfailed -eq $true)
+    {
+        $failedFAs += $flasharray.endpoint
+        $hostgroupfailure = $true
+    }
+    else
+    {
+        $successfulFAs += $flasharray.endpoint
+    }
 }
 
+$templog = Get-Content $logfile
+rm $logfile
+if ($hostgroupfailure -eq $true)
+{
+    add-content -Path $logfile -Value ("****THERE IS AN ERROR WITH THE CREATION OF ONE OR MORE HOST GROUPS, REVIEW LOG BELOW FOR DETAILS. LOOK FOR LINES MARKED WITH ********ERROR********")
+    add-content $logfile ""
+    add-content $logfile "The creation of a host group on the following FlashArray(s) failed:" 
+    $failedFAs | out-string | add-content $logfile
+    add-content $logfile ""
+    write-host "" 
+    write-host ("Host groups on the following FlashArray(s) failed to create. Refer to the log for additional information.") -foregroundColor Red
+    $failedFAs | out-string | write-host
+}
 
+if ($successfulFAs.count -ge 1)
+{
+    add-content $logfile ("Host groups on the following FlashArray(s) successfully created. Refer to the log for additional information.")
+    $successfulFAs | out-string | add-content $logfile
+    write-host ""
+    write-host ("Host groups on the following FlashArray(s) successfully created.") -foregroundColor green
+    $successfulFAs | out-string | write-host
+}
 
-
+$templog | out-string | add-content $logfile
 
 
 
