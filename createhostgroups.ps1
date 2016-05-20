@@ -26,6 +26,7 @@ $protocol = ""
 $logfolder = 'C:\folder\folder\etc\'
 #**********************************
 
+
 <#
 *******Disclaimer:******************************************************
 This scripts are offered "as is" with no warranty.  While this 
@@ -74,7 +75,7 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage VMware ESXi Host Group Creation Script v2.1'
+add-content $logfile 'Pure Storage VMware ESXi Host Group Creation Script v2.2'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 $facount=0
@@ -84,6 +85,22 @@ $successfulFAs = @()
 $Pwd = ConvertTo-SecureString $pureuserpwd -AsPlainText -Force
 $Creds = New-Object System.Management.Automation.PSCredential ($pureuser, $pwd)
 write-host "Script information can be found at $logfile" -ForegroundColor Green
+
+function disconnectvCenter
+{
+    #a function to disconnect sessions
+    add-content $logfile ("Disconnecting vCenter session")
+    disconnect-viserver -Server $vcenter -confirm:$false
+}
+function disconnectFlashArray
+{
+    #a function to disconnect sessions
+    add-content $logfile ("Disconnecting FlashArray session(s)")
+    foreach ($flasharray in $endpoint)
+    {
+        Disconnect-PfaArray -Array $flasharray
+    }
+}
 
 if (($protocol -ne "FC") -and ($protocol -ne "iSCSI"))
 {
@@ -114,7 +131,8 @@ else
                 write-host "Terminating Script" -BackgroundColor Red
                 add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
                 add-content $logfile $Error[0]
-                add-content $logfile "Terminating Script" 
+                add-content $logfile "Terminating Script"
+                disconnectFlashArray 
                 return
             }
         }
@@ -130,6 +148,7 @@ else
                 write-host $Error[0]
                 add-content $logfile ("Connection to FlashArray " + $flasharray + " failed. Please check credentials or IP/FQDN")
                 add-content $logfile $Error[0]
+                disconnectFlashArray
                 return
             }
         }
@@ -143,8 +162,8 @@ else
     #Important PowerCLI if not done and connect to vCenter. 
 
     if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
-    . "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" 
-    }
+    . "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" |Out-Null
+    } Out-Null
     Set-PowerCLIConfiguration -invalidcertificateaction 'ignore' -confirm:$false |out-null
     Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
     if ((Get-PowerCLIVersion).build -lt 3737840)
@@ -159,6 +178,7 @@ else
         add-content $logfile (Get-PowerCLIVersion).build
         add-content $logfile "Terminating Script"
         add-content $logfile "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
+        disconnectFlashArray
         return
     }
 
@@ -176,15 +196,35 @@ else
         add-content $logfile $vcenter
         add-content $logfile $Error[0]
         add-content $logfile "Terminating Script"
+        disconnectFlashArray
         return
     }
 
     add-content $logfile ('Connected to vCenter at ' + $vcenter)
     add-content $logfile '----------------------------------------------------------------------------------------------------'
-
     #Instantiate Cluster and Host variables
-    $esxicluster = get-cluster $cluster
-    $esxihosts = $esxicluster | Get-VMHost
+    try
+    {
+        $esxicluster = get-cluster $cluster -ErrorAction Stop
+    }
+    catch
+    {
+        add-content $logfile ("A cluster with the name " + $cluster + " could not be found. Verify cluster name. Terminating script.")
+        write-host ("A cluster with the name " + $cluster + " could not be found. Verify cluster name. Terminating script.") -BackgroundColor Red
+        add-content $logfile $error[0]
+        disconnectFlashArray
+        disconnectvCenter
+        return
+    }
+    $esxihosts = $esxicluster | Get-VMHost -ErrorAction Stop
+    if ($esxihosts.Count -eq 0)
+    {
+        add-content $logfile ("No ESXi hosts were found in the cluster named " + $cluster + ". Verify cluster configuration/permissions. Terminating script.")
+        write-host ("No ESXi hosts were found in the cluster named " + $cluster + ". Verify cluster configuration/permissions. Terminating script.") -BackgroundColor Red
+        disconnectFlashArray
+        disconnectvCenter
+        return
+    }
 }
 #-----------------------------------------------------------------------------------------------------------------------------------------------------------
 #Configure the VMware cluster as a new host group on the FlashArray. Using the cluster name as the host group name.
@@ -224,7 +264,9 @@ foreach ($flasharray in $endpoint)
                 if ($iscsiadapter -eq $null)
                 {
                     add-content $logfile ("No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". Terminating script. No changes were made.")
-                    exit
+                    disconnectFlashArray
+                    disconnectvCenter
+                    return
                 }
                 else
                 {
@@ -566,12 +608,5 @@ if ($successfulFAs.count -ge 1)
 }
 
 $templog | out-string | add-content $logfile
-
-
-
-
-
-
-
-
-
+disconnectFlashArray
+disconnectvCenter
