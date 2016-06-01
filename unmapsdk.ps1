@@ -108,7 +108,6 @@ function logInsightRestCall
                         fields = ([Object[]]$fields)
                         }))
                 } |convertto-json -Depth 4
-    $loginsightserver = "loginsight.csgvmw.local"
     $resturl = ("http://" + $loginsightserver + ":9000/api/v1/messages/ingest/" + $loginsightagentID)
     add-content $logfile ""
     add-content $logfile ("Posting results to Log Insight server: " + $loginsightserver)
