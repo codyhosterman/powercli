@@ -85,6 +85,8 @@ $successfulFAs = @()
 $Pwd = ConvertTo-SecureString $pureuserpwd -AsPlainText -Force
 $Creds = New-Object System.Management.Automation.PSCredential ($pureuser, $pwd)
 write-host "Script information can be found at $logfile" -ForegroundColor Green
+$hostgroupfailure = $false
+
 
 function disconnectvCenter
 {
