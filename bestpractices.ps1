@@ -1,9 +1,11 @@
 ﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
+#If a specific cluster is to be targeted change "*" to "CLUSTER_NAME".
 #Put all entries inside the quotes:
 #**********************************
 $vcenter = ""
 $vcuser = ""
 $vcpass = ""
+$vccluster = "*"
 $logfolder = "C:\folder\folder\etc\"
 #**********************************
 
@@ -110,7 +112,7 @@ catch
 add-content $logfile ('Connected to vCenter at ' + $vcenter)
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-$hosts= get-vmhost
+$hosts= get-cluster -Name $vccluster | get-vmhost
 
 add-content $logfile "Iterating through all ESXi hosts..."
 
