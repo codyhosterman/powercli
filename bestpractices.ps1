@@ -1,5 +1,5 @@
 ﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
-#If a specific cluster is required to be targeted change "*" to "CLUSTER_NAME".
+#If a specific cluster is to be targeted change "*" to "CLUSTER_NAME".
 #Put all entries inside the quotes:
 #**********************************
 $vcenter = ""
