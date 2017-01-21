@@ -1,13 +1,4 @@
-﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
-#Put all entries inside the quotes:
-#**********************************
-$vcenter = ""
-$vcuser = ""
-$vcpass = ""
-$logfolder = "C:\folder\folder\etc\"
-#**********************************
-
-<#
+﻿<#
 Optional parameters. Keep these values at default unless necessary and understood
 For a different IO Operations limit beside the Pure Storage recommended value of 1, change $iopsvalue to another integer value 1-1000. 
 To skip changing host-wide settings for XCOPY Transfer Size and In-Guest UNMAP change $hostwidesettings to $false
@@ -31,6 +22,7 @@ This script will:
 -Configure any existing devices properly (Pure Storage FlashArray devices only)
 -Set VAAI XCOPY transfer size to 16MB
 -Enable EnableBlockDelete on ESXi 6 hosts only
+-Check all VMFS-6 volumes that automatic UNMAP is enabled
 
 All change operations are logged to a file. 
 
@@ -38,17 +30,24 @@ This can be run directly from PowerCLI or from a standard PowerShell prompt. Pow
 
 Supports:
 -FlashArray 400 Series and //m
--vCenter 5.0 and later
+-vCenter 5.5 and later
 -PowerCLI 6.3 R1 or later required
-
 
 For info, refer to www.codyhosterman.com
 #>
+write-host "Please choose a directory to store the script log"
+function ChooseFolder([string]$Message, [string]$InitialDirectory)
+{
+    $app = New-Object -ComObject Shell.Application
+    $folder = $app.BrowseForFolder(0, $Message, 0, $InitialDirectory)
+    $selectedDirectory = $folder.Self.Path 
+    return $selectedDirectory
+}
+$logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
+$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "setbestpractices.txt"
+write-host "Script result log can be found at $logfile" -ForegroundColor Green
 
-#Create log folder if non-existent
-If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
-$logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "setbestpractices.txt"
-write-host "Checking and setting Pure Storage FlashArray Best Practices for VMware on the ESXi hosts in this vCenter. No further information is printed to the screen."
+write-host "Checking and setting Pure Storage FlashArray Best Practices for VMware on the ESXi hosts in this vCenter."
 write-host "Script log information can be found at $logfile"
 
 add-content $logfile '             __________________________'
@@ -72,42 +71,65 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v3.1'
+add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v4.0'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
+
 if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
-. “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+      . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    elseif (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+        . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
+    {
+        write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
+        write-host "Terminating Script" -BackgroundColor Red
+        add-content $logfile ("PowerCLI not found. Please verify installation and retry.")
+        add-content $logfile "Terminating Script" 
+        return
+    }
+        
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
-
 if ((Get-PowerCLIVersion).build -lt 3737840)
 {
     write-host "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)" -BackgroundColor Red
     write-host "Found the following build number:"
     write-host (Get-PowerCLIVersion).build
     write-host "Terminating Script" -BackgroundColor Red
+    write-host "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
     add-content $logfile "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)"
     add-content $logfile "Found the following build number:"
     add-content $logfile (Get-PowerCLIVersion).build
     add-content $logfile "Terminating Script"
+    add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
     return
 }
-
+$vcenter = read-host "Please enter a vCenter IP or FQDN"
+$Creds = $Host.ui.PromptForCredential("vCenter Credentials", "Please enter your vCenter username and password.", "","")
 try
 {
-    connect-viserver -Server $vcenter -username $vcuser -password $vcpass -ErrorAction Stop |out-null
+    connect-viserver -Server $vcenter -Credential $Creds -ErrorAction Stop |out-null
+    add-content $logfile ('Connected to vCenter at ' + $vcenter)
+    add-content $logfile '----------------------------------------------------------------------------------------------------'
 }
 catch
 {
     write-host "Failed to connect to vCenter" -BackgroundColor Red
-    write-host $Error
+    write-host $vcenter
+    write-host $Error[0]
     write-host "Terminating Script" -BackgroundColor Red
     add-content $logfile "Failed to connect to vCenter"
-    add-content $logfile $Error
+    add-content $logfile $vcenter
+    add-content $logfile $Error[0]
     add-content $logfile "Terminating Script"
     return
 }
-add-content $logfile ('Connected to vCenter at ' + $vcenter)
+write-host ""
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 $hosts= get-vmhost
@@ -139,9 +161,9 @@ foreach ($esx in $hosts)
         {
             add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is correct at 16 MB and will not be altered."
         }
-        if ($esx.Version -like "6.0.*")
+        if ($esx.Version -like "6.*")
         { 
-            $enableblockdelete = ($esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete).Value
+            $enableblockdelete = $esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete
             if ($enableblockdelete.Value -eq 0)
             {
                 add-content $logfile "EnableBlockDelete is currently disabled. Enabling..."
@@ -155,7 +177,7 @@ foreach ($esx in $hosts)
         }
         else
         {
-            add-content $logfile "The current host is not version 6.0. Skipping EnableBlockDelete check."
+            add-content $logfile "The current host is not version 6.x. Skipping EnableBlockDelete check."
         }
     }
     else
@@ -308,6 +330,40 @@ foreach ($esx in $hosts)
     else
     {
         add-content $logfile "No existing Pure Storage volumes found on this host."
+    }
+    if ($esx.Version -like "6.5.*")
+    {
+        add-content $logfile "Current ESXi is version 6.5"
+        add-content $logfile "Checking datastores for VMFS 6 Automatic UNMAP Setting"
+        $datastores = $esx |get-datastore
+        foreach ($datastore in $datastores)
+        {
+            add-content $logfile ""
+            if ($datastore.ExtensionData.info.vmfs.version -like "6.*")
+            {
+                add-content $logfile ("The VMFS named " + $datastore.name + " is version six. Checking Automatic UNMAP configuration...")
+                $unmapargs = $esxcli.storage.vmfs.reclaim.config.get.createargs()
+                $unmapargs.volumelabel = $datastore.name
+                $unmapresult = $esxcli.storage.vmfs.reclaim.config.get.invoke($unmapargs)
+                if ($unmapresult.ReclaimPriority -ne "low")
+                {
+                    add-content $logfile ("Automatic Space Reclamation is not set to low. It is set to " + $unmapresult.ReclaimPriority)
+                    add-content $logfile "Setting to low..."
+                    $unmapsetargs = $esxcli.storage.vmfs.reclaim.config.set.createargs()
+                    $unmapsetargs.volumelabel = $datastore.name
+                    $unmapsetargs.reclaimpriority = "low"
+                    $esxcli.storage.vmfs.reclaim.config.set.invoke($unmapsetargs)
+                }
+                elseif ($unmapresult.ReclaimPriority -eq "low")
+                {
+                    add-content $logfile ("Automatic Space Reclamation is correctly set to low.")
+                }
+            }
+            else 
+            {
+                add-content $logfile ("The VMFS named " + $datastore.name + " is not version 6 so automatic UNMAP is not supported. Skipping.")
+            }
+        }
     }
 }
  disconnect-viserver -Server $vcenter -confirm:$false
