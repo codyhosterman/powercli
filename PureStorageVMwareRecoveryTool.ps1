@@ -557,6 +557,7 @@ function getDisks{
                     $deleteCheckBox.Checked = $false
                     $deleteCheckBox.Enabled = $true
                     $newSnapshotTextBox.Enabled = $true
+                    $buttonSnapshots.Enabled = $true
                 }
                 else
                 {
@@ -792,6 +793,7 @@ function newSnapshot{
                     $newSnapshotTextBox.Text = ""
                     $LabelNewSnapError.ForeColor = "Black"
                     $LabelNewSnapError.Text = "$($newSnapshot.Name) ($($newSnapshot.Created))"
+                    $buttonNewSnapshot.Enabled = $false
                     
             }
         }
