@@ -23,7 +23,7 @@ Supports:
 -FlashArray 400 Series and //m
 -vCenter 5.5 and later
 
-'Pure Storage FlashArray VMware Snapshot Recovery Tool v1.0.0'
+'Pure Storage FlashArray VMware Snapshot Recovery Tool v1.0.1'
 #>
 
 #Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
@@ -50,7 +50,7 @@ $EndPoint = $null
 $ErrorActionPreference = "Stop"
 #Connection Functions
 function connectServer{
-
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $connect = Connect-VIServer -Server $serverTextBox.Text -User $usernameTextBox.Text -Password $passwordTextBox.Text -ErrorAction stop
@@ -80,7 +80,7 @@ function connectServer{
 }
 
 function disconnectServer{
-
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $disconnect = Disconnect-VIServer -Server $serverTextBox.Text -Confirm:$false -Force:$true -ErrorAction stop
@@ -121,6 +121,7 @@ function disconnectServer{
     }
 }
 function connectFlashArray{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
      try
         {
             $FApassword = convertto-securestring $flasharrayPasswordTextBox.Text -asplaintext -force
@@ -151,6 +152,7 @@ function connectFlashArray{
         }
 }
 function disconnectFlashArray{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try
     {
         Disconnect-PfaArray -Array $EndPoint -ErrorAction stop
@@ -176,6 +178,7 @@ function disconnectFlashArray{
 
 #Inventory Functions
 function getDatastores{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $DatastoreDropDownBox.Items.Clear()
@@ -237,6 +240,7 @@ function getDatastores{
 }
 
 function getClusters{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $clusters = Get-Cluster #Returns all clusters
@@ -255,6 +259,7 @@ function getClusters{
     $ClusterDropDownBox.SelectedIndex = 0
 }
 function getRecoveryClusters{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $clusters = Get-Cluster #Returns all clusters
@@ -272,6 +277,7 @@ function getRecoveryClusters{
     $RecoveryClusterDropDownBox.SelectedIndex = 0
 }
 function getSnapshots{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try
     {
         $SnapshotDropDownBox.Items.Clear()
@@ -344,6 +350,7 @@ function getSnapshots{
     }
 }
 function getHostGroup{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try
     {
         $fcinitiators = @()
@@ -416,6 +423,7 @@ function getHostGroup{
     }
 }
 function getVMs{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try 
     {
         $VMDropDownBox.Items.Clear()
@@ -482,6 +490,7 @@ function getVMs{
     }
 }
 function getDisks{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     $SnapshotDropDownBox.Items.Clear()
     $SnapshotDropDownBox.Enabled = $false
     $newSnapshotTextBox.Enabled = $false
@@ -750,6 +759,7 @@ function radioSelect{
 }
 #Recover Function
 function newSnapshot{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     try
     {
         $LabelNewSnapError.Text = ""
@@ -808,6 +818,7 @@ function newSnapshot{
     }
 }
 function recoverObject{
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
     if ($RadioButtonRDM.Checked -eq $false)
     {
         getHostGroup
@@ -1293,6 +1304,7 @@ function recoverObject{
     $main_form.Size = New-Object System.Drawing.Size(500,1000) 
     $main_form.StartPosition = "CenterScreen"
     $main_form.KeyPreview = $True
+    $main_form.AutoScroll = $True
     $main_form.Add_KeyDown({if ($_.KeyCode -eq "Escape") 
     {$main_form.Close()}})
 
@@ -1429,7 +1441,7 @@ function recoverObject{
     $LabelAbout = New-Object System.Windows.Forms.Label
     $LabelAbout.Location = New-Object System.Drawing.Point(10, 20)
     $LabelAbout.Size = New-Object System.Drawing.Size(90, 170)
-    $LabelAbout.Text = "Version 1.0.0`r`n`r`nBy Cody Hosterman`r`n`r`nRequires:`r`n-----------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+"
+    $LabelAbout.Text = "Version 1.0.1`r`n`r`nBy Cody Hosterman`r`n`r`nRequires:`r`n-----------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+"
     $groupBoxInfo.Controls.Add($LabelAbout)  
 
     $LabelClusterFilter = New-Object System.Windows.Forms.Label
