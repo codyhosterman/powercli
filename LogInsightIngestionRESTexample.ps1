@@ -37,7 +37,7 @@ write-host '            \------------\'
 write-host 'Log Insight Ingestion REST API Example'
 write-host '----------------------------------------------------------------------------------------------------'
 
-$loginsightserver = "loginsight.csgvmw.local"
+$loginsightserver = "10.21.10.27"
 $loginsightagentID = "624a9370"
 
     $restvmfs = [ordered]@{

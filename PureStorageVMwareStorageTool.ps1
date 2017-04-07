@@ -1,0 +1,3258 @@
+﻿<#
+***************************************************************************************************
+VMWARE POWERCLI AND PURE STORAGE POWERSHELL SDK MUST BE INSTALLED ON THE MACHINE THIS IS RUNNING ON
+***************************************************************************************************
+
+For info, refer to www.codyhosterman.com
+
+*******Disclaimer:******************************************************
+This scripts are offered "as is" with no warranty.  While this 
+scripts is tested and working in my environment, it is recommended that you test 
+this script in a test lab before using in a production environment. Everyone can 
+use the scripts/commands provided here without any written permission but I
+will not be liable for any damage or loss to the system.
+************************************************************************
+
+This can be run directly from PowerCLI or from a standard PowerShell prompt. PowerCLI must be installed on the local host regardless.
+
+Supports:
+-PowerShell 3.0 or later
+-Pure Storage PowerShell SDK 1.7 or later
+-PowerCLI 6.3 Release 1+
+-Purity 4.1 and later
+-FlashArray 400 Series and //m
+-vCenter 5.5 and later
+
+'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.0.0'
+#>
+#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
+if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+    if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+      . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    elseif (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+        . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
+    {
+        write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
+        write-host "Terminating Script" -BackgroundColor Red
+        return
+    }
+}
+#Set
+$EndPoint = $null
+$Endpoints = @()
+$ErrorActionPreference = "Stop"
+#Connection Functions
+function connectServer{
+    try 
+    {
+        $connect = Connect-VIServer -Server $serverTextBox.Text -User $usernameTextBox.Text -Password $passwordTextBox.Text -ErrorAction stop
+        $buttonConnect.Enabled = $false #Disable controls once connected
+        $serverTextBox.Enabled = $false
+        $usernameTextBox.Enabled = $false
+        $passwordTextBox.Enabled = $false
+        $buttonDisconnect.Enabled = $true #Enable Disconnect button
+        $outputTextBox.text = ((get-Date -Format G) + " Successfully connected to vCenter $($serverTextBox.Text)`r`n$($outputTextBox.text)")
+        if (($endpoints.count -ge 1) -and ($buttonDisconnect.Enabled = $true))
+        {
+            getClusters
+            enableObjects
+            $TabControl.Enabled = $true
+        }
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function disconnectServer{
+    try 
+    {
+        $disconnect = Disconnect-VIServer -Server $serverTextBox.Text -Confirm:$false -Force:$true -ErrorAction stop
+        $buttonConnect.Enabled = $true #Enable login controls once disconnected
+        $serverTextBox.Enabled = $true
+        $usernameTextBox.Enabled = $true
+        $passwordTextBox.Enabled = $true
+        $buttonDisconnect.Enabled = $false #Disable Disconnect button
+        $outputTextBox.text = (get-Date -Format G) + " Successfully disconnected from vCenter $($serverTextBox.Text)`r`n" + $outputTextBox.text
+        disableObjects
+        $TabControl.Enabled = $false
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function connectFlashArray{
+   
+    try
+    {
+        $FApassword = convertto-securestring $flasharrayPasswordTextBox.Text -asplaintext -force
+        $script:EndPoints += New-PfaArray -EndPoint $flasharrayTextBox.Text -Username $flasharrayUsernameTextBox.Text -Password $FApassword -IgnoreCertificateError -ErrorAction stop
+        $outputTextBox.text = (get-Date -Format G) + " Successfully connected to FlashArray $($flasharrayTextBox.Text)" + ("`r`n") + $outputTextBox.text
+        $newArray = Get-PfaArrayAttributes -Array $endpoints[-1]
+        $FAisValid = $true
+        for ($i=0;$i -lt ($endpoints.count - 1);$i++)
+        {
+             $currentArray = Get-PfaArrayAttributes -Array $endpoints[$i]
+             if ($currentArray.id -eq $newArray.id)
+             {
+                $outputTextBox.text = (get-Date -Format G) + " ERROR: Will not connect this FlashArray. This FlashArray is already registered under the IP/FQDN of $($endpoints[$i].endpoint)" + ("`r`n") + $outputTextBox.text
+                $FAisValid = $false
+
+             }
+        }
+        if ($FAisValid -eq $false)
+        {
+            disconnectFlashArray
+        }
+        else
+        {
+            $flasharrayButtonConnect.enabled = $false
+            $flasharrayButtonDisconnect.enabled = $true
+            $flasharrayTextBox.Enabled = $false
+            $flasharrayUsernameTextBox.Enabled = $false
+            $flasharrayPasswordTextBox.Enabled = $false
+            $FlashArrayDropDownBox.Items.Add($flasharrayTextBox.Text)
+            $flasharrayPasswordTextBox.Text = ""
+            $flasharrayUsernameTextBox.Text = ""
+            $FlashArrayDropDownBox.Enabled=$true
+            $FlashArrayDropDownBox.SelectedIndex = $endpoints.count
+            if (($endpoints.count -eq 1) -and ($buttonDisconnect.Enabled -eq $true))
+            {
+                getClusters
+                enableObjects
+                $TabControl.Enabled = $true
+            }
+             elseif (($endpoints.count -gt 1) -and ($buttonDisconnect.Enabled -eq $true))
+            {
+                listFlashArrays
+            }
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " Connection to FlashArray " + $flasharrayTextBox.Text + " failed. Please check credentials or IP/FQDN") + ("`r`n") + $outputTextBox.text
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function disconnectFlashArray{
+    try
+    {
+        foreach ($EndPoint in $Endpoints)
+        {
+            if ($endpoint.endpoint-eq $flasharrayTextBox.Text)
+            {
+                break
+            }
+        }
+        Disconnect-PfaArray -Array $EndPoint -ErrorAction stop
+        $script:endpoints = $endpoints -ne $endpoint
+        $outputTextBox.text = ((get-Date -Format G) + " Successfully disconnected from FlashArray " + $flasharrayTextBox.Text) + ("`r`n") + $outputTextBox.text
+        $FlashArrayDropDownBox.Items.Remove($flasharrayTextBox.Text)
+        $FlashArrayDropDownBox.SelectedIndex = $endpoints.count
+        if ($Endpoints.count -eq 0)
+        {
+            $RadioButtonVM.Enabled = $false
+            $RadioButtonVMDK.Enabled = $false
+            $RadioButtonRDM.Enabled = $false
+        }
+        if (($endpoints.count -ge 1) -and ($buttonDisconnect.Enabled = $true))
+        {
+            listFlashArrays
+        }
+        if (($endpoints.count -eq 0))
+        {
+            disableObjects
+            $TabControl.Enabled = $false
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " Disconnection from FlashArray " + $flasharrayTextBox.Text + " failed.") + ("`r`n") + $outputTextBox.text
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+#Inventory Functions
+function getDatastores{
+    
+    try 
+    {
+        $DatastoreDropDownBox.Items.Clear()
+        if ($ClusterDropDownBox.SelectedItem.ToString() -eq "<All Clusters>")
+        {
+            if ($nameFilterTextBox.Text -ne "")
+            {
+                $datastores = get-datastore -Name ("*" + $nameFilterTextBox.Text + "*") | where-object {$_.Type -eq "VMFS"}
+            }
+            else
+            {
+                $datastores = get-datastore | where-object {$_.Type -eq "VMFS"}
+            }
+        }
+        else
+        {
+            if ($nameFilterTextBox.Text -ne "")
+            {
+                $datastores = get-cluster -Name $ClusterDropDownBox.SelectedItem.ToString() |get-datastore -Name ("*" + $nameFilterTextBox.Text + "*") | where-object {$_.Type -eq "VMFS"}
+            }
+            else
+            {
+                $datastores = get-cluster -Name $ClusterDropDownBox.SelectedItem.ToString() |get-datastore | where-object {$_.Type -eq "VMFS"}
+            }
+        }
+        if ($datastores.count -ge 1)
+        {
+            $DatastoreDropDownBox.Enabled=$true
+            $DatastoreDropDownBox.Items.Add("Choose VMFS...")
+            foreach ($datastore in $datastores) 
+            {
+                $DatastoreDropDownBox.Items.Add($datastore.Name) #Add Datastores to DropDown List
+            }
+            $DatastoreDropDownBox.SelectedIndex = 0
+        }
+        elseif ($datastores.count -eq 0)
+        {
+            $DatastoreDropDownBox.Enabled=$false
+            $DatastoreDropDownBox.Items.Add("<No Datastores Found>") #Add Datastores to DropDown List
+            $DatastoreDropDownBox.SelectedIndex = 0
+            $buttonSnapshots.Enabled = $false
+            $newSnapshotTextBox.Enabled = $false
+        }
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getClusters{  
+    try 
+    {
+        $clusters = Get-Cluster #Returns all clusters
+        $ClusterDropDownBox.Items.Clear()
+        $ClusterDropDownBox.Items.Add("<All Clusters>")
+        foreach ($cluster in $clusters) 
+        {
+            $ClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+        } 
+        $ClusterDropDownBox.Enabled = $true
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+    $ClusterDropDownBox.SelectedIndex = 0
+}
+function getRecoveryClusters{
+  
+    try 
+    {
+        $clusters = Get-Cluster -ErrorAction stop #Returns all clusters
+        
+        if ($getVMFSCluster -eq $true)
+        {
+            $CreateVMFSClusterDropDownBox.Items.Clear()
+            $CreateVMFSClusterDropDownBox.Items.Add("Choose a Cluster...")
+            foreach ($cluster in $clusters) 
+            {
+                $CreateVMFSClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+                $CreateVMFSClusterDropDownBox.Enabled = $true
+            }
+            $CreateVMFSClusterDropDownBox.SelectedIndex = 0
+        }
+        elseif ($RecoveryClusterDropDownBox.Enabled -eq $true)
+        {
+            $RecoveryClusterDropDownBox.Items.Clear()
+            $RecoveryClusterDropDownBox.Items.Add("Choose a Cluster...")
+            foreach ($cluster in $clusters) 
+            {
+                $RecoveryClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+                $RecoveryClusterDropDownBox.Enabled = $true
+            }
+            $RecoveryClusterDropDownBox.SelectedIndex = 0
+        } 
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+    
+}
+function getSnapshots{
+    try
+    {
+        $SnapshotDropDownBox.Items.Clear()
+        $SnapshotDropDownBox.Enabled = $false
+        if ($TabControl.SelectedIndex -eq 0)
+        {
+                    $datastore = get-datastore $DatastoreDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                    $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+        }
+        getFlashArray
+        if ($script:lun -like 'naa.624a9370*')
+        {
+            $volumes = Get-PfaVolumes -Array $EndPoint
+            $volserial = ($lun.ToUpper()).substring(12)
+            $script:purevol = $volumes | where-object { $_.serial -eq $volserial }
+            if ($purevol -eq $null)
+            {
+                $outputTextBox.text = (get-Date -Format G) + " ERROR: Volume not found on a connected FlashArray." + ("`r`n") + $outputTextBox.text
+                $SnapshotDropDownBox.Items.Clear()
+                $buttonSnapshots.Enabled = $false
+                $newSnapshotTextBox.Enabled = $false
+                $buttonDeleteVMFS.Enabled = $false
+                $newSnapshotTextBox.Text = ""
+                $LabelNewSnapError.Text = ""
+                $SnapshotDropDownBox.Enabled = $false
+                $buttonDelete.Enabled = $false
+
+            }
+            else
+            {
+                $script:snapshots = $null
+                $script:snapshots = Get-PfaVolumeSnapshots -array $endpoint -VolumeName $purevol.name
+                $buttonDeleteVMFS.Enabled = $true
+                if ($snapshots -ne $null)
+                {
+                    $SnapshotDropDownBox.Items.Add("Choose a Snapshot...")
+                    foreach ($snapshot in $snapshots) 
+                    {
+                        $SnapshotDropDownBox.Items.Add("$($snapshot.Name) ($($snapshot.Created))") #Add snapshots to drop down List
+                    }
+                    $SnapshotDropDownBox.Enabled=$true
+                    $newSnapshotTextBox.Enabled = $true
+                    $SnapshotDropDownBox.SelectedIndex = 0
+                }
+                else
+                {
+                    $SnapshotDropDownBox.Items.Add("No snapshots found")
+                    $SnapshotDropDownBox.SelectedIndex = 0
+                    $newSnapshotTextBox.Enabled = $true
+                    $SnapshotDropDownBox.Enabled=$false
+                }
+            }
+        }
+        else
+        {
+            $outputTextBox.text = (get-Date -Format G) + " Selected datastore is not a FlashArray volume." + ("`r`n") + $outputTextBox.text
+            $SnapshotDropDownBox.Items.Clear()
+            $buttonSnapshots.Enabled = $false
+            $newSnapshotTextBox.Enabled = $false
+            $buttonDeleteVMFS.Enabled = $false
+            $newSnapshotTextBox.Text = ""
+            $LabelNewSnapError.Text = ""
+            $SnapshotDropDownBox.Enabled = $false
+            $buttonDelete.Enabled = $false
+        }
+
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getVMSnapshots{
+    try
+    {
+        $VMSnapshotDropDownBox.Items.Clear()
+        $VMSnapshotDropDownBox.Enabled = $false
+        if ($script:RadioButtonVMDK.Checked -eq $true)
+        {
+            $datastore = get-datastore (($VMDKDropDownBox.SelectedItem.ToString() |foreach { $_.Split("]")[0] }).substring(1))  -ErrorAction stop
+            $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+        }
+        elseif ($script:RadioButtonRDM.Checked -eq $true)
+        {
+            $script:lun = ($RDMDropDownBox.SelectedItem.ToString()).substring(0,36)
+        }
+        else
+        {
+            $datastore = get-vm -Name $VMDropDownBox.SelectedItem.ToString() |Get-Datastore  -ErrorAction stop
+            $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+            if ($datastore.count -gt 1)
+            {
+                $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+                $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+                $buttonGetVMSnapshots.Enabled = $false
+                $newVMSnapshotTextBox.Enabled = $false
+                $buttonNewVMSnapshot.Enabled = $false
+                $newVMSnapshotTextBox.Text = ""
+                disableRecoveryItems
+                throw "This VM uses more than one datastore and is not currently supported in this tool for full recovery. Use per-VMDK or per-RDM recovery instead."
+            }
+        }
+        getFlashArray
+        if ($script:lun -like 'naa.624a9370*')
+        {
+            $volumes = Get-PfaVolumes -Array $EndPoint
+            $volserial = ($lun.ToUpper()).substring(12)
+            $script:purevol = $volumes | where-object { $_.serial -eq $volserial }
+            if ($purevol -eq $null)
+            {
+                disableRecoveryItems
+                $outputTextBox.text =  (get-Date -Format G) + " ERROR: Volume not found on a connected FlashArray." + ("`r`n") + $outputTextBox.text
+                $VMSnapshotDropDownBox.Items.Clear()
+                $buttonGetVMSnapshots.Enabled = $false
+                $VMSnapshotDropDownBox.Enabled = $false
+                $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+                $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+                $newVMSnapshotTextBox.Enabled = $false
+                $buttonNewVMSnapshot.Enabled = $false
+                $newVMSnapshotTextBox.Text = ""
+            }
+            else
+            {
+                $script:snapshots = $null
+                $script:snapshots = Get-PfaVolumeSnapshots -array $endpoint -VolumeName $purevol.name
+                if ($snapshots -ne $null)
+                {
+                    $VMSnapshotDropDownBox.Items.Add("Choose a Snapshot...")
+                    foreach ($snapshot in $snapshots) 
+                    {
+                        $VMSnapshotDropDownBox.Items.Add("$($snapshot.Name) ($($snapshot.Created))") #Add snapshots to drop down List
+                    }
+                    $VMSnapshotDropDownBox.Enabled=$true
+                    $buttonGetVMSnapshots.Enabled = $true
+                    $VMSnapshotDropDownBox.SelectedIndex = 0
+                    $newVMSnapshotTextBox.Enabled = $true
+                }
+                else
+                {
+                    $VMSnapshotDropDownBox.Items.Add("No snapshots found")
+                    $VMSnapshotDropDownBox.SelectedIndex = 0
+                    $VMSnapshotDropDownBox.Enabled=$false
+                    $buttonGetVMSnapshots.Enabled = $false
+                    $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+                    $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+                    $newVMSnapshotTextBox.Enabled = $true
+                }
+            }
+        }
+        else
+        {
+            $outputTextBox.text = (get-Date -Format G) + " Selected datastore is not a FlashArray volume." + ("`r`n") + $outputTextBox.text
+            $VMSnapshotDropDownBox.Items.Clear()
+            $newSnapshotTextBox.Enabled = $false
+            $newSnapshotTextBox.Text = ""
+            $LabelNewSnapError.Text = ""
+            $VMSnapshotDropDownBox.Enabled = $false
+            $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+            $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+            $buttonGetVMSnapshots.Enabled = $false
+        }
+
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getHostGroup{
+    try
+    {
+        $fcinitiators = @()
+        $iscsiinitiators = @()
+        if ($TabControl.SelectedIndex -eq 0)
+        {
+            if ($script:createVMFS -eq $true)
+            {
+                $recoveryobject = get-cluster -Name $CreateVMFSClusterDropDownBox.SelectedItem.ToString()
+                $fatemp = $ChooseFlashArrayDropDownBox.SelectedItem.ToString()
+                foreach ($faArray in $endpoints)
+                {
+                    if ($faArray.endpoint -eq $fatemp)
+                    {
+                        $script:endpoint = $faArray
+                        break
+                    }
+                }
+            }
+            else
+            {
+                $recoveryobject = get-cluster -Name $RecoveryClusterDropDownBox.SelectedItem.ToString()
+            }
+        }
+        else
+        {
+            if (($script:RadioButtonVM.Checked -eq $true) -and ($cloneObject -eq $true))
+            {
+                $recoveryobject = get-cluster -Name $TargetClusterDropDownBox.SelectedItem.ToString()
+            }
+            elseif((($script:RadioButtonVMDK.Checked -eq $true) -or ($script:RadioButtonRDM.Checked -eq $true)) -and ($cloneObject -eq $true))
+            {
+                $recoveryobject = get-vm -Name $TargetVMDropDownBox.SelectedItem.ToString()
+            }
+            else
+            {
+                $recoveryobject = get-vm -Name $VMDropDownBox.SelectedItem.ToString()
+            }
+        }
+        $iscsiadapters = $recoveryobject  |Get-VMHost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
+        $fcadapters = $recoveryobject  |Get-VMHost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+        foreach ($iscsiadapter in $iscsiadapters)
+        {
+            $iqn = $iscsiadapter.ExtensionData.IScsiName
+            $iscsiinitiators += $iqn.ToLower()
+        }
+        $fcadapters = (($fcadapters.Replace("`n","")).Replace("`r","")).Replace(" ","")
+        $fcadapters = &{for ($i = 0;$i -lt $fcadapters.length;$i += 16)
+        {
+                $fcadapters.substring($i,16)
+        }}
+        foreach ($fcadapter in $fcadapters)
+        {
+            $fcinitiators += $fcadapter.ToLower()
+        }
+        $fahosts = Get-PfaHosts -array $endpoint
+        $script:hostgroup = $null
+        foreach ($fahost in $fahosts)
+        {
+            foreach ($iscsiinitiator in $iscsiinitiators)
+            {
+                if ($fahost.iqn -contains $iscsiinitiator)
+                {
+                    $script:hostgroup = $fahost.hgroup
+                    break
+                }
+            }
+            if ($hostgroup -ne $null)
+            {
+                break
+            }
+            foreach ($fcinitiator in $fcinitiators)
+            {
+                if ($fahost.wwn -contains $fcinitiator)
+                {
+                    $script:hostgroup = $fahost.hgroup
+                    break
+                }
+            }
+            if ($hostgroup -ne $null)
+            {
+                break
+            }
+        }
+        if ($hostgroup -eq $null)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " No matching host group could be found") + ("`r`n") + $outputTextBox.text
+        }
+        else
+        {
+           $outputTextBox.text = ((get-Date -Format G) + " The host group identified is named $($hostgroup)`r`n$($outputTextBox.text)") 
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getVMs{
+    try 
+    {
+        $VMDropDownBox.Items.Clear()
+        if ($ClusterDropDownBox.SelectedItem.ToString() -eq "<All Clusters>")
+        {
+            if ($nameFilterTextBox.Text -ne "")
+            {
+                $vms = get-vm -Name ("*" + $nameFilterTextBox.Text + "*") -ErrorAction stop
+            }
+            else
+            {
+                $vms = get-vm -ErrorAction stop
+            }
+        }
+        else
+        {
+            if ($nameFilterTextBox.Text -ne "")
+            {
+                $vms = get-cluster -Name $ClusterDropDownBox.SelectedItem.ToString() -ErrorAction stop|get-vm -Name ("*" + $nameFilterTextBox.Text + "*") -ErrorAction stop
+            }
+            else
+            {
+                $vms = get-cluster -Name $ClusterDropDownBox.SelectedItem.ToString() -ErrorAction stop |get-vm -ErrorAction stop
+            }
+        }
+        if ($vms.count -eq 0)
+        {
+            $VMDropDownBox.Items.Add("No VMs found")
+            $VMDropDownBox.SelectedIndex = 0
+            $VMDropDownBox.Enabled=$false
+        }
+        else
+        {
+            $VMDropDownBox.Items.Add("Choose VM...")
+            foreach ($vm in $vms) 
+            {
+                $VMDropDownBox.Items.Add($vm.Name) #Add VMs to DropDown List                
+            }
+            $VMDropDownBox.Enabled=$true
+            $VMDropDownBox.SelectedIndex = 0
+        }
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getDisks{
+    try
+    {
+        if (($VMDropDownBox.text -ne "No VMs found") -and ($script:RadioButtonVM.Checked -ne $true))
+        {
+            if ($script:RadioButtonVMDK.Checked -eq $true)
+            {
+                $VMDKDropDownBox.Items.Clear()
+                $atLeastOnevdisk = $false
+                $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString() -ErrorAction stop
+                $vmdevices = $vm.ExtensionData.Config.Hardware.Device 
+                foreach ($vmdevice in $vmdevices)
+                {
+                    if ($vmdevice.gettype().Name -eq "VirtualDisk")
+                    {
+                        if ( $vmdevice.Backing.gettype().Name -eq "VirtualDiskFlatVer2BackingInfo")
+                        {
+                            if ($atLeastOnevdisk -eq $false)
+                            {
+                                $VMDKDropDownBox.Items.Add("Choose a VMDK...")
+                            }
+                            $atLeastOnevdisk = $true
+                            $VMDKDropDownBox.Items.Add(("$($vmdevice.Backing.fileName) ($($vmdevice.CapacityInKB/1024/1024) GB)"))
+                        }
+                    } 
+                }
+                if ($atLeastOnevdisk -eq $true)
+                {
+                    $VMDKDropDownBox.Enabled = $true
+                    $VMDKDropDownBox.SelectedIndex = 0
+                }
+                else
+                {
+                    $VMDKDropDownBox.Items.Add("No virtual disks found")
+                    $VMDKDropDownBox.SelectedIndex = 0
+                }
+            }
+            elseif ($script:RadioButtonRDM.Checked -eq $true)
+            {
+                $RDMDropDownBox.Items.Clear()
+                $atLeastOnerdm = $false
+                $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString() -ErrorAction stop
+                $vmdevices = $vm.ExtensionData.Config.Hardware.Device 
+                foreach ($vmdevice in $vmdevices)
+                {
+                    if ($vmdevice.gettype().Name -eq "VirtualDisk")
+                    {
+                        if ( $vmdevice.Backing.gettype().Name -eq "VirtualDiskRawDiskMappingVer1BackingInfo")
+                        {
+                            if ($atLeastOnerdm -eq $false)
+                            {
+                                $RDMDropDownBox.Items.Add("Choose a RDM...")
+                            }
+                            $atLeastOnerdm = $true
+                            $RDMname = ("naa.$($vmdevice.Backing.DeviceName.substring(14,32)) ($($vmdevice.CapacityInKB/1024/1024) GB)")
+                            $RDMDropDownBox.Items.Add($RDMname)
+                        }
+                    } 
+                }
+                if ($atLeastOnerdm -eq $true)
+                {
+                    $RDMDropDownBox.Enabled = $true
+                    $RDMDropDownBox.SelectedIndex = 0
+                }
+                else
+                {
+                    $RDMDropDownBox.Items.Add("No raw device mappings found")
+                    $RDMDropDownBox.SelectedIndex = 0
+                    $RDMDropDownBox.Enabled = $false
+                }
+            }
+        }
+        else
+        {
+
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getFlashArray{
+    try
+    {
+        $volArraySN = $script:lun.substring(12,16)
+        foreach ($FAarray in $endpoints)
+        {
+            $arraySN = Get-PfaArrayAttributes -Array $FAarray
+            $arraySN = $arraySN.id.substring(0,18)
+            $arraySN = $arraySN -replace '-',''
+            if ($arraySN -ieq $volArraySN)
+            {
+                $script:endpoint = $FAarray
+                break
+            }
+            else
+            {
+                $script:endpoint = $FAarray
+            }
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function listFlashArrays{
+    try
+    {
+        $ChooseFlashArrayDropDownBox.Items.Clear()
+        $ChooseFlashArrayDropDownBox.Items.Add("Choose a FlashArray...")
+        foreach ($fa in $endpoints)
+        {
+            $ChooseFlashArrayDropDownBox.Items.Add($fa.endpoint)
+        }
+        $ChooseFlashArrayDropDownBox.SelectedIndex = 0
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getTargetVMs{
+    try 
+    {
+        $targetVMs = Get-VM #Returns all VMs
+        $TargetVMDropDownBox.Items.Clear()
+        $TargetVMDropDownBox.Items.Add("Choose Target VM...")
+        foreach ($targetVM in $targetVMs) 
+        {
+            $TargetVMDropDownBox.Items.Add($targetVM.Name) #Add VMs to DropDown List
+        } 
+        $TargetVMDropDownBox.Enabled = $true
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+    $TargetVMDropDownBox.Enabled = $true
+    $TargetVMDropDownBox.SelectedIndex = 0
+}
+function getTargetClusters{
+    try 
+    {
+        if ($TargetDatastoreDropDownBox.SelectedItem.ToString() -eq "<Keep on a New Recovery Datastore>")
+        {
+            $targetClusters = get-cluster #Returns all clusters
+        }
+        else
+        {
+            $targetClusters = get-datastore $TargetDatastoreDropDownBox.SelectedItem.ToString() |get-vmhost |get-cluster #Returns all clusters
+        }
+        $TargetClusterDropDownBox.Items.Clear()
+        $TargetClusterDropDownBox.Items.Add("Choose Target Cluster...")
+        foreach ($targetCluster in $targetClusters) 
+        {
+            $TargetClusterDropDownBox.Items.Add($targetCluster.Name) #Add Clusters to DropDown List
+        } 
+        $TargetClusterDropDownBox.Enabled = $true
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+    $TargetClusterDropDownBox.Enabled = $true
+    $TargetClusterDropDownBox.SelectedIndex = 0
+}
+function getTargetDatastores{
+    try 
+    {
+        $targetDatastores = Get-Datastore |Where-Object {$_.Type -eq "VMFS"} #Returns all datastores
+        $TargetDatastoreDropDownBox.Items.Clear()
+        $TargetDatastoreDropDownBox.Items.Add("Choose Target Datastore...")
+        $TargetDatastoreDropDownBox.Items.Add("<Keep on a New Recovery Datastore>")
+        foreach ($targetDatastore in $targetDatastores) 
+        {
+            $TargetDatastoreDropDownBox.Items.Add($targetDatastore.Name) #Add Datastores to DropDown List
+        } 
+        $TargetDatastoreDropDownBox.Enabled = $true
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+    $TargetDatastoreDropDownBox.Enabled = $true
+    $TargetDatastoreDropDownBox.SelectedIndex = 0
+}
+#Context change functions
+function radioSelectChanged{
+    disableRecoveryItems
+    $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+    $CheckBoxDeleteVMObject.Checked = $false
+    $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+    if ($script:RadioButtonVM.Checked -eq $true)
+    {
+        if ($groupBoxRecoverVM.text -eq "Restore/Clone Virtual Disk:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetDatastoreDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($TargetVMDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetVM)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetDatastore)
+        }
+        elseif($groupBoxRecoverVM.text -eq "Restore/Clone Raw Device Mapping:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetVMDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetVM)
+            $groupBoxRecoverVM.Controls.Remove($groupBoxRestoreRDM)
+            $groupBoxRecoverVM.Controls.Add($groupBoxRestoreVM)
+        }
+        $script:groupBoxRecoverVM.text = "Restore/Clone Virtual Machine:"
+        $buttonDeleteVM.Text = "Delete VM"
+        $script:LabelTargetDatastore.Location = New-Object System.Drawing.Point(5, 20)
+        $script:LabelTargetCluster.Location = New-Object System.Drawing.Point(5, 45)
+        $script:TargetDatastoreDropDownBox.Location = New-Object System.Drawing.Size(90,20)
+        $script:TargetClusterDropDownBox.Location = New-Object System.Drawing.Size(90,45) 
+        $script:groupBoxCloneVM.Controls.Add($TargetDatastoreDropDownBox)
+        $script:groupBoxCloneVM.Controls.Add($TargetClusterDropDownBox)
+        $script:groupBoxCloneVM.Controls.Add($LabelTargetCluster)
+        $script:groupBoxCloneVM.Controls.Add($LabelTargetDatastore)
+    }
+    elseif ($script:RadioButtonVMDK.Checked -eq $true)
+    {
+        if ($groupBoxRecoverVM.text -eq "Restore/Clone Virtual Machine:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetDatastoreDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($TargetClusterDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetDatastore)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetCluster)
+        }
+        elseif($groupBoxRecoverVM.text -eq "Restore/Clone Raw Device Mapping:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetVMDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetVM)
+            $groupBoxRecoverVM.Controls.Remove($groupBoxRestoreRDM)
+            $groupBoxRecoverVM.Controls.Add($groupBoxRestoreVM)
+        }
+        $script:groupBoxRecoverVM.text = "Restore/Clone Virtual Disk:"
+        $buttonDeleteVM.Text = "Delete VMDK"
+        $script:LabelTargetVM.Location = New-Object System.Drawing.Point(5, 20)
+        $script:LabelTargetDatastore.Location = New-Object System.Drawing.Point(5, 45)
+        $script:TargetVMDropDownBox.Location = New-Object System.Drawing.Size(90,20) 
+        $script:TargetDatastoreDropDownBox.Location = New-Object System.Drawing.Size(90,45)
+        $script:groupBoxCloneVM.Controls.Add($TargetDatastoreDropDownBox)
+        $script:groupBoxCloneVM.Controls.Add($TargetVMDropDownBox)
+        $script:groupBoxCloneVM.Controls.Add($LabelTargetVM)
+        $script:groupBoxCloneVM.Controls.Add($LabelTargetDatastore)
+    }
+    elseif ($script:RadioButtonRDM.Checked -eq $true)
+    {
+        if ($groupBoxRecoverVM.text -eq "Restore/Clone Virtual Machine:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetDatastoreDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($TargetClusterDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetDatastore)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetCluster)
+        }
+        elseif ($groupBoxRecoverVM.text -eq "Restore/Clone Virtual Disk:")
+        {
+            $script:groupBoxCloneVM.Controls.Remove($TargetDatastoreDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($TargetVMDropDownBox)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetVM)
+            $script:groupBoxCloneVM.Controls.Remove($LabelTargetDatastore)
+        }
+        $groupBoxRecoverVM.Controls.Remove($groupBoxRestoreVM)
+        $groupBoxRecoverVM.Controls.Add($groupBoxRestoreRDM)
+        $script:groupBoxRecoverVM.text = "Restore/Clone Raw Device Mapping:"
+        $buttonDeleteVM.Text = "Delete RDM"
+        $script:LabelTargetVM.Location = New-Object System.Drawing.Point(5, 30)
+        $script:TargetVMDropDownBox.Location = New-Object System.Drawing.Size(90,30) 
+        $script:groupBoxCloneVM.Controls.Add($TargetVMDropDownBox)
+        $script:groupBoxCloneVM.Controls.Add($LabelTargetVM)
+    }
+    if ($script:RadioButtonVM.Checked -eq $true)
+    {
+        if ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...")
+        {
+            getVMSnapshots
+        }
+        if ($script:vmdkChosen -eq $true)
+        {
+            $script:groupBoxVM.Controls.Remove($groupBoxVMDK) 
+            $script:vmdkChosen = $false
+        }
+        if ($script:rdmChosen -eq $true)
+        {
+            $script:groupBoxVM.Controls.Remove($groupBoxRDM) 
+            $script:rdmChosen = $false
+        }
+        $CheckBoxDeleteVMObject.Text = "I confirm that I want to delete this ENTIRE virtual machine"
+        $groupBoxDeleteVMObject.text = "Delete Virtual Machine:" 
+    }
+    elseif ($script:RadioButtonVMDK.Checked -eq $true)
+    {
+        if ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...")
+        {
+            getDisks
+        }
+        if ($script:rdmChosen -eq $true)
+        {
+            $script:groupBoxVM.Controls.Remove($groupBoxRDM) 
+            $script:rdmChosen = $false
+        }
+        $script:vmdkChosen = $true
+        $script:groupBoxVM.Controls.Add($groupBoxVMDK) 
+        $CheckBoxDeleteVMObject.Text = "I confirm that I want to delete this virtual disk"
+        $groupBoxDeleteVMObject.text = "Delete Virtual Disk:" 
+    }
+    elseif ($script:RadioButtonRDM.Checked -eq $true)
+    {
+        if ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...")
+        {
+            getDisks
+        }
+        if ($script:vmdkChosen -eq $true)
+        {
+            $script:groupBoxVM.Controls.Remove($groupBoxVMDK) 
+            $script:vmdkChosen = $false
+        }
+        $script:rdmChosen = $true
+        $script:groupBoxVM.Controls.Add($groupBoxRDM) 
+        $CheckBoxDeleteVMObject.Text = "I confirm that I want to delete this raw device mapping"
+        $groupBoxDeleteVMObject.text = "Delete Raw Device Mapping:" 
+    }
+    enableVMDetails
+}
+function vmDiskSelectionChanged{
+    if (($script:RadioButtonVMDK.Checked -eq $true) -and ($VMDKDropDownBox.SelectedItem.ToString() -ne "Choose a VMDK...") -and ($VMDKDropDownBox.SelectedItem.ToString() -ne "No virtual disks found") )
+    {
+        $CheckBoxDeleteVMObject.Enabled = $true
+        getVMSnapshots
+        disableRecoveryItems
+    }
+    elseif (($script:RadioButtonRDM.Checked -eq $true) -and ($RDMDropDownBox.SelectedItem.ToString() -ne "Choose a RDM...") -and ($RDMDropDownBox.SelectedItem.ToString() -ne "No raw device mappings found") )
+    {
+        $CheckBoxDeleteVMObject.Enabled = $true
+        getVMSnapshots
+        disableRecoveryItems
+    }
+    else
+    {
+        $CheckBoxDeleteVMObject.Enabled = $false
+        $CheckBoxDeleteVMObject.Enabled = $false
+        $VMSnapshotDropDownBox.Enabled = $false
+        $VMSnapshotDropDownBox.Items.Clear()
+        $buttonGetVMSnapshots.Enabled = $false
+        disableRecoveryItems
+    }
+    if (($script:RadioButtonVMDK.Checked -eq $true) -and ($VMDKDropDownBox.SelectedItem.ToString() -eq "Choose a VMDK..."))
+    {
+        $newVMSnapshotTextBox.Enabled = $false
+        disableRecoveryItems
+    }
+    elseif (($script:RadioButtonRDM.Checked -eq $true) -and ($RDMDropDownBox.SelectedItem.ToString() -eq "Choose a RDM..."))
+    {
+        $newVMSnapshotTextBox.Enabled = $false
+        disableRecoveryItems
+    }
+    $CheckBoxDeleteVMObject.Checked = $false
+}
+function isSnapshotTextChanged{
+    if ($TabControl.SelectedIndex -eq 0)
+    {
+        $LabelNewSnapError.Text = ""
+        if (($newSnapshotTextBox.Text -notmatch "^[\w\-]+$") -and ($newSnapshotTextBox.Text -ne ""))
+        {
+            $LabelNewSnapError.ForeColor = "Red"
+            $LabelNewSnapError.Text = "The snapshot name must only be letters, numbers or dashes"
+            $buttonNewSnapshot.Enabled = $false
+        }
+        elseif($newVMSnapshotTextBox.Text -eq "")
+        {
+            $buttonNewSnapshot.Enabled = $false
+        }
+        else
+        {
+            $buttonNewSnapshot.Enabled = $true
+        }
+    }
+    elseif ($TabControl.SelectedIndex -eq 1)
+    {
+        $LabelNewVMSnapError.Text = ""
+        if (($newVMSnapshotTextBox.Text -notmatch "^[\w\-]+$") -and ($newVMSnapshotTextBox.Text -ne ""))
+        {
+            $LabelNewVMSnapError.ForeColor = "Red"
+            $LabelNewVMSnapError.Text = "The snapshot name must only be letters, numbers or dashes"
+            $buttonNewVMSnapshot.Enabled = $false
+        }
+        elseif($newVMSnapshotTextBox.Text -eq "")
+        {
+            $buttonNewVMSnapshot.Enabled = $false
+        }
+        else
+        {
+            $buttonNewVMSnapshot.Enabled = $true
+        }
+    }
+}
+function datastoreSelectionChanged{
+    if (($DatastoreDropDownBox.Enabled -eq $true) -and ($DatastoreDropDownBox.SelectedItem.ToString() -ne "<No Datastores Found>") -and ($DatastoreDropDownBox.SelectedItem.ToString() -ne "Choose VMFS..."))
+    {
+        getSnapshots
+        $buttonSnapshots.Enabled = $true
+    }
+    else
+    {
+        $SnapshotDropDownBox.Items.Clear()
+        $buttonSnapshots.Enabled = $false
+        $newSnapshotTextBox.Enabled = $false
+        $buttonDeleteVMFS.Enabled = $false
+        $newSnapshotTextBox.Text = ""
+        $SnapshotDropDownBox.Enabled = $false
+    }
+}
+function clusterSelectionChanged{
+    
+}
+function vmSelectionChanged{
+    if (($VMDropDownBox.Enabled -eq $true) -and ($VMDropDownBox.SelectedItem.ToString() -ne "<No Virtual Machines Found>") -and ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM..."))
+    {
+        $CheckBoxDeleteVMObject.Enabled = $false
+        if ($script:RadioButtonVM.Checked -eq $true)
+        {
+            $CheckBoxDeleteVMObject.Enabled = $true
+        }
+        $CheckBoxDeleteVMObject.Checked = $false
+        $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+        $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+        getDisks
+        if ($script:RadioButtonVM.Checked -eq $true)
+        {
+            getVMSnapshots
+        }
+    }
+    else
+    {
+        $CheckBoxDeleteVMObject.Enabled = $false
+        $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+        $CheckBoxDeleteVMObject.Checked = $false
+        $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+        $VMSnapshotDropDownBox.Items.Clear()
+        $VMSnapshotDropDownBox.Enabled = $false
+        $buttonGetVMSnapshots.Enabled = $false
+        disableRecoveryItems
+        if ($script:RadioButtonVMDK.Checked -eq $true)
+        {
+            $script:VMDKDropDownBox.Items.Clear()
+            $script:VMDKDropDownBox.Enabled = $false
+            $CheckBoxDeleteVMObject.Enabled = $false
+        }
+        elseif ($script:RadioButtonRDM.Checked -eq $true)
+        {
+            $script:RDMDropDownBox.Items.Clear()
+            $script:RDMDropDownBox.Enabled = $false
+            $CheckBoxDeleteVMObject.Enabled = $false
+        }
+
+    }
+}
+function isVMFSTextChanged{
+    $LabelNewVMFSError.Text = ""
+    if (($newVMFSTextBox.Text -notmatch "^[\w\-]+$") -and ($newVMFSTextBox.Text -ne ""))
+    {
+        $LabelNewVMFSError.ForeColor = "Red"
+        $LabelNewVMFSError.Text = "The VMFS name must only be letters, numbers or dashes"
+        $buttonNewVMFS.Enabled = $false
+        $script:nameIsValid = $false
+    }
+    elseif ($newVMFSTextBox.Text -eq "")
+    {
+        $script:nameIsValid = $false
+        enableCreateVMFS
+    }
+    else
+    {
+        $script:nameIsValid = $true
+        enableCreateVMFS
+    }
+}
+function isVCTextChanged{
+    if (($passwordTextBox.Text.Length  -gt 0) -and ($usernameTextBox.Text.Length  -gt 0) -and ($ServerTextBox.Text.Length  -gt 0) ) 
+    {
+        $buttonConnect.enabled = $true
+    } 
+    else 
+    {
+        $buttonConnect.enabled = $false
+    }
+}
+function isFATextChanged{
+    if (($flasharrayPasswordTextBox.Text.Length  -gt 0) -and ($flasharrayUsernameTextBox.Text.Length  -gt 0) -and ($flasharrayTextBox.Text.Length  -gt 0) ) 
+    {
+        $flasharrayButtonConnect.enabled = $true
+    } 
+    else 
+    {
+        $flasharrayButtonConnect.enabled = $false
+    }
+}
+function snapshotChanged{
+    try
+    {
+        if (($SnapshotDropDownBox.SelectedItem.ToString() -ne "Choose a Snapshot...") -and ($SnapshotDropDownBox.Enabled -eq $true))
+        {
+            $buttonDelete.Enabled = $true
+            $newSnapshotTextBox.Text = ""
+            $LabelNewSnapError.Text = ""
+            $RecoveryClusterDropDownBox.Enabled=$true
+            getRecoveryClusters
+        }
+        else 
+        {
+            $buttonDelete.Enabled = $false
+            $RecoveryClusterDropDownBox.Enabled=$false
+            $RecoveryClusterDropDownBox.Items.Clear()
+            $newSnapshotTextBox.Text = ""
+            $LabelNewSnapError.Text = ""
+            $buttonRecover.Enabled = $false
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function vmSnapshotChanged{
+    try
+    {
+        if (($VMSnapshotDropDownBox.SelectedItem.ToString() -ne "Choose a Snapshot...") -and ($VMSnapshotDropDownBox.Enabled -eq $true))
+        {
+            $CheckBoxDeleteVMObjectSnapshot.Enabled = $true
+            $buttonRestoreVM.Enabled = $true
+            $buttonRestoreRDM.Enabled = $true
+            $migrateVMCheckBox.Enabled = $true
+            if ($script:RadioButtonVM.Checked -eq $true)
+            {
+                getTargetDatastores
+            }
+            elseif ($script:RadioButtonVMDK.Checked -eq $true)
+            {
+                getTargetVMs
+            }
+            elseif ($script:RadioButtonRDM.Checked -eq $true)
+            {
+                getTargetVMs
+            }
+        }
+        else 
+        {
+            $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+            $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+            $buttonRestoreVM.Enabled = $false
+            $buttonRestoreRDM.Enabled = $false
+            $migrateVMCheckBox.Enabled = $false
+            disableRecoveryItems
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function FlashArrayChanged{
+    if ($FlashArrayDropDownBox.SelectedItem.ToString() -eq "Add new FlashArray...")
+       {
+            if ($endpoints.count -eq 0)
+            {
+                $FlashArrayDropDownBox.Enabled = $false
+            }
+            $flasharrayTextBox.Text = ""
+            $flasharrayPasswordTextBox.Text = ""
+            $flasharrayUsernameTextBox.Text = ""
+            $flasharrayTextBox.Enabled = $true
+            $flasharrayPasswordTextBox.Enabled = $true
+            $flasharrayUsernameTextBox.Enabled = $true
+            $flasharrayButtonDisconnect.enabled = $false
+            $flasharrayButtonConnect.enabled = $false
+            
+       }
+       else
+       {
+            $flasharrayTextBox.Text = $FlashArrayDropDownBox.SelectedItem.ToString()
+            $flasharrayPasswordTextBox.Text = ""
+            $flasharrayUsernameTextBox.Text = ""
+            $flasharrayTextBox.Enabled = $false
+            $flasharrayPasswordTextBox.Enabled = $false
+            $flasharrayUsernameTextBox.Enabled = $false
+            $flasharrayButtonDisconnect.enabled = $true
+            $flasharrayButtonConnect.enabled = $false
+       }
+}
+function sizeChanged{
+    $LabelNewVMFSSizeError.Text = ""
+    if (($newVMFSSizeTextBox.Text -notmatch "^[\d]+$") -and ($newVMFSSizeTextBox.Text -ne ""))
+    {
+        $LabelNewVMFSSizeError.ForeColor = "Red"
+        $LabelNewVMFSSizeError.Text = " The size must be a whole integer greater than zero"
+        $buttonNewVMFS.Enabled = $false
+        $script:sizeIsValid = $false
+    }
+    elseif (($newVMFSSizeTextBox.Text -eq 0) -and ($newVMFSSizeTextBox.Text -ne ""))
+    {
+        $LabelNewVMFSSizeError.ForeColor = "Red"
+        $LabelNewVMFSSizeError.Text = " The size must be greater than zero"
+        $buttonNewVMFS.Enabled = $false
+        $script:sizeIsValid = $false
+    }
+    elseif ($newVMFSSizeTextBox.Text -eq "")
+    {
+        $script:sizeIsValid = $false
+        enableCreateVMFS
+    }
+    else
+    {
+        $script:sizeIsValid = $true
+        enableCreateVMFS
+    }
+}
+function vmDeleteCheckedChanged{
+   if (($CheckBoxDeleteVMObject.Checked -eq $false) -or ($CheckBoxDeleteVMObject.Enabled -eq $false)) 
+   {
+        $buttonDeleteVM.Enabled = $false
+   }
+   elseif ($CheckBoxDeleteVMObject.Checked -eq $true)
+   {
+        $buttonDeleteVM.Enabled = $true
+   }
+}
+function vmDeleteSnapshotCheckedChanged{
+   if (($CheckBoxDeleteVMObjectSnapshot.Checked -eq $false) -or ($CheckBoxDeleteVMObjectSnapshot.Enabled -eq $false)) 
+   {
+        $buttonDeleteVMSnapshot.Enabled = $false
+   }
+   elseif ($CheckBoxDeleteVMObjectSnapshot.Checked -eq $true)
+   {
+        $buttonDeleteVMSnapshot.Enabled = $true
+   }
+}
+function targetClusterSelectionChanged{
+    if ($script:RadioButtonVM.Checked -eq $true)
+    {
+        if (($targetClusterDropDownBox.SelectedItem.ToString() -ne "Choose Target Cluster...") -and ($targetClusterDropDownBox.Enabled -eq $true))
+        {
+            $buttonCloneVM.Enabled = $true
+        }
+        elseif (($targetClusterDropDownBox.SelectedItem.ToString() -eq "Choose Target Cluster...") -or ($targetClusterDropDownBox.Enabled -eq $false))
+        {
+            $buttonCloneVM.Enabled = $false
+        }
+    }
+}
+function targetVMSelectionChanged{
+    if ($script:RadioButtonVMDK.Checked -eq $true)
+    {
+        if (($targetVMDropDownBox.SelectedItem.ToString() -ne "Choose Target VM...") -and ($targetVMDropDownBox.Enabled -eq $true))
+        {
+            getTargetDatastores
+        }
+        elseif (($targetVMDropDownBox.SelectedItem.ToString() -eq "Choose Target VM...") -or ($targetVMDropDownBox.Enabled -eq $false))
+        {
+            $TargetDatastoreDropDownBox.Items.Clear()
+            $TargetDatastoreDropDownBox.Enabled = $false
+            $buttonCloneVM.Enabled = $false
+        }
+    }
+    if ($script:RadioButtonRDM.Checked -eq $true)
+    {
+        if (($targetVMDropDownBox.SelectedItem.ToString() -ne "Choose Target VM...") -and ($targetVMDropDownBox.Enabled -eq $true))
+        {
+            $buttonCloneVM.Enabled = $true
+        }
+        elseif (($targetVMDropDownBox.SelectedItem.ToString() -eq "Choose Target VM...") -or ($targetVMDropDownBox.Enabled -eq $false))
+        {
+            $buttonCloneVM.Enabled = $false
+        }
+    }
+}
+function targetDatastoreSelectionChanged{
+    if ($script:RadioButtonVM.Checked -eq $true)
+    {
+        if (($targetDatastoreDropDownBox.SelectedItem.ToString() -ne "Choose Target Datastore...") -and ($targetDatastoreDropDownBox.Enabled -eq $true))
+        {
+            getTargetClusters
+        }
+        elseif (($targetDatastoreDropDownBox.SelectedItem.ToString() -eq "Choose Target Datastore...") -or ($targetDatastoreDropDownBox.Enabled -eq $false))
+        {
+            $TargetClusterDropDownBox.Items.Clear()
+            $TargetClusterDropDownBox.Enabled = $false
+            $buttonCloneVM.Enabled = $false
+        }
+    }
+    elseif ($script:RadioButtonVMDK.Checked -eq $true)
+    {
+        if (($targetDatastoreDropDownBox.SelectedItem.ToString() -ne "Choose Target Datastore...") -and ($targetDatastoreDropDownBox.Enabled -eq $true))
+        {
+            $buttonCloneVM.Enabled = $true
+        }
+        elseif (($targetDatastoreDropDownBox.SelectedItem.ToString() -eq "Choose Target Datastore...") -or ($targetDatastoreDropDownBox.Enabled -eq $false))
+        {
+            $buttonCloneVM.Enabled = $false
+        }
+    }
+}
+#Enable functions
+function enableCreateVMFS{
+    if (($nameIsValid -eq $true) -and ($sizeIsValid -eq $true) -and ($ChooseFlashArrayDropDownBox.SelectedItem.ToString() -ne "Choose a FlashArray...") -and ($CreateVMFSClusterDropDownBox.SelectedItem.ToString() -ne "Choose a Cluster..."))
+    {
+        $buttonNewVMFS.Enabled = $true
+    }
+    else
+    {
+        $buttonNewVMFS.Enabled = $false
+    }
+}
+function enableVMDetails{
+    if (($VMDropDownBox.Enabled -eq $true) -and ($VMDropDownBox.SelectedItem.ToString() -ne "<No Virtual Machines Found>") -and ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM..."))
+    {
+        if ($script:RadioButtonVM.Checked -eq $true)
+        {
+
+        }
+        elseif ($script:RadioButtonVMDK.Checked -eq $true)
+        {
+            $VMDKDropDownBox.Enabled=$true
+            $CheckBoxDeleteVMObject.Enabled=$false
+        }
+        elseif ($script:RadioButtonRDM.Checked -eq $true)
+        {
+            $RDMDropDownBox.Enabled=$true 
+            $CheckBoxDeleteVMObject.Enabled=$false
+        }
+        getDisks
+    }
+    elseif (($VMDropDownBox.SelectedItem.ToString() -eq "<No Virtual Machines Found>") -and ($VMDropDownBox.SelectedItem.ToString() -eq "Choose VM..."))
+    {
+        $VMDKDropDownBox.Enabled=$false
+        $RDMDropDownBox.Enabled=$false
+        $CheckBoxDeleteVMObject.Enabled=$false
+        $CheckBoxDeleteVMObject.Enabled=$false
+    }
+}
+function enableRecovery{
+    if (($RecoveryClusterDropDownBox.SelectedItem.ToString() -eq "Choose a Cluster...") -or ($RecoveryClusterDropDownBox.Enabled -eq $false))
+    {
+        $buttonRecover.Enabled = $false
+    }
+    else
+    {
+        $buttonRecover.Enabled = $true
+    }
+}
+function enableObjects{
+    disableObjects
+    if ($TabControl.SelectedIndex -eq 0)
+    {
+        $ChooseFlashArrayDropDownBox.Enabled=$true 
+        $CreateVMFSClusterDropDownBox.Enabled=$true
+        $newVMFSTextBox.Enabled = $true 
+        $newVMFSSizeTextBox.Enabled = $true
+        $UnitDropDownBox.Enabled=$true
+        $buttonDatastores.Enabled = $true
+        $ClusterDropDownBox.Enabled=$true
+        $nameFilterTextBox.Enabled = $true
+        listFlashArrays
+        getDatastores
+        $getVMFSCluster = $true
+        getRecoveryClusters
+        $getVMFSCluster = $false
+    }
+    elseif($TabControl.SelectedIndex -eq 1)
+    {
+        $VMDropDownBox.Enabled = $true
+        $buttonVMs.Enabled = $true
+        $ClusterDropDownBox.Enabled=$true
+        $nameFilterTextBox.Enabled = $true
+        $RadioButtonVM.Enabled = $true
+        $RadioButtonVMDK.Enabled = $true
+        $RadioButtonRDM.Enabled = $true
+        getVMs
+        $script:RadioButtonVM.Checked = $true
+    }
+}
+function disableObjects{
+    if ($TabControl.SelectedIndex -eq 0)
+    {
+        $buttonDatastores.Enabled = $false
+        $buttonDeleteVMFS.Enabled = $false
+        $buttonSnapshots.Enabled = $false 
+        $buttonNewSnapshot.Enabled = $false 
+        $buttonNewVMFS.Enabled = $false 
+        $buttonRecover.Enabled = $false 
+        $buttonDelete.Enabled = $false 
+        $nameFilterTextBox.Enabled = $false
+        $newSnapshotTextBox.Enabled = $false
+        $newVMFSTextBox.Enabled = $false
+        $newVMFSSizeTextBox.Enabled = $false
+        $ClusterDropDownBox.Enabled=$false 
+        $DatastoreDropDownBox.Enabled=$false 
+        $UnitDropDownBox.Enabled=$false 
+        $CreateVMFSClusterDropDownBox.Enabled=$false 
+        $ChooseFlashArrayDropDownBox.Enabled=$false 
+        $RecoveryClusterDropDownBox.Enabled=$false 
+        $SnapshotDropDownBox.Enabled=$false
+    }
+    elseif($TabControl.SelectedIndex -eq 1)
+    {
+        $VMDropDownBox.Enabled = $false
+        $buttonVMs.Enabled = $false
+        $ClusterDropDownBox.Enabled=$false
+        $nameFilterTextBox.Enabled = $false
+        $RadioButtonVM.Enabled = $false
+        $RadioButtonVMDK.Enabled = $false
+        $RadioButtonRDM.Enabled = $false
+    }
+ 
+}
+function disableRecoveryItems{
+    $script:TargetDatastoreDropDownBox.Items.Clear()
+    $script:TargetDatastoreDropDownBox.Enabled = $false
+    $script:buttonCloneVM.Enabled = $false
+    $script:TargetClusterDropDownBox.Items.Clear()
+    $script:TargetClusterDropDownBox.Enabled = $false
+    $script:TargetVMDropDownBox.Items.Clear()
+    $script:TargetVMDropDownBox.Enabled = $false
+    $script:buttonRestoreVM.Enabled = $false
+    $script:buttonRestoreRDM.Enabled = $false
+    $migrateVMCheckBox.Enabled = $false
+}
+#Operation Functions
+function deleteVMObject{
+    if ($script:RadioButtonVM.Checked -eq $true)
+    {
+        deleteVM
+    }
+    elseif ($script:RadioButtonVMDK.Checked -eq $true)
+    {
+        deleteVMDK
+    }
+    elseif ($script:RadioButtonRDM.Checked -eq $true)
+    {
+        deleteRDM
+    }
+}
+function deleteSnapshot{
+    try
+    {
+         $deletedSnap = Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $snapshots[$SnapshotDropDownBox.SelectedIndex-1].name
+         $outputTextBox.text = ((get-Date -Format G) + " Deleted snapshot $($deletedSnap.name)`r`n$($outputTextBox.text)")
+         getSnapshots
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function deleteVMSnapshot{
+    try
+    {
+         $deletedSnap = Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $snapshots[$VMSnapshotDropDownBox.SelectedIndex-1].name
+         $outputTextBox.text = ((get-Date -Format G) + " Deleted snapshot $($deletedSnap.name)`r`n$($outputTextBox.text)")
+         getVMSnapshots
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function deleteVMFS{
+  
+    $outputTextBox.text = ((get-Date -Format G) + " Deleting datastore $($DatastoreDropDownBox.SelectedItem.ToString())...`r`n$($outputTextBox.text)")
+    try
+    {
+        $deleteVmfs = get-datastore $DatastoreDropDownBox.SelectedItem.ToString() -ErrorAction stop
+        $vms = $deleteVmfs |get-vm -ErrorAction stop
+        $templates = $deleteVmfs |get-template -ErrorAction stop
+        if (($vms.count -eq 0) -and ($templates.count -eq 0))
+        {
+            $lun = $deleteVmfs.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+            $volumes = Get-PfaVolumes -Array $EndPoint
+            $volserial = ($lun.ToUpper()).substring(12)
+            $deletevol = $volumes | where-object { $_.serial -eq $volserial }
+            if ($deletevol -eq $null)
+            {
+                $outputTextBox.text =  "ERROR: Volume not found on connected FlashArray." + ("`r`n") + $outputTextBox.text
+                return
+            }
+            $FAhostgroups = Get-PfaVolumeHostGroupConnections -Array $endpoint -VolumeName $deletevol.name
+            $FAhosts = Get-PfaVolumeHostConnections -Array $endpoint -VolumeName $deletevol.name
+            $esxihosts = $deleteVmfs |get-vmhost -ErrorAction stop
+            $FAhostgroups = $FAhostgroups.hgroup |Select-Object -unique
+            $FAhosts = $FAhosts.host |Select-Object -unique
+            $outputTextBox.text = ((get-Date -Format G) + " Unmounting and detaching volume from each ESXi host...`r`n$($outputTextBox.text)")
+            foreach ($esxihost in $esxihosts)
+            {
+                $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	            $StorageSystem.UnmountVmfsVolume($deleteVmfs.ExtensionData.Info.vmfs.uuid) 
+                $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost -ErrorAction stop| where {$_.CanonicalName -eq $deleteVmfs.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+            }
+            foreach ($FAhost in $FAhosts)
+            {
+                Remove-PfaHostVolumeConnection -Array $endpoint -VolumeName $deletevol.name -HostName $FAhost
+            }
+            foreach ($FAhostgroup in $FAhostgroups)
+            {
+                Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $deletevol.name -HostGroupName $FAhostgroup
+            }
+            Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $deletevol.name
+            $outputTextBox.text = ((get-Date -Format G) + " The FlashArray volume $($deletevol.name) has been deleted`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+            $esxihosts | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETED: The datastore and FlashArray volume has been deleted`r`n$($outputTextBox.text)")
+            getDatastores 
+        } 
+        else
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " ERROR: Cannot delete this VMFS as there are virtual machines and/or templates using it.`r`n$($outputTextBox.text)")
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function deleteVM{
+
+    try
+    {
+        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+        $vm |remove-vm -DeletePermanently -Confirm:$false -ErrorAction stop
+        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Deleted VM $($VMDropDownBox.SelectedItem.ToString())`r`n$($outputTextBox.text)")
+        getVMs
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function deleteVMDK{
+  
+    try
+    {
+        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+        $filepath = ($VMDKDropDownBox.SelectedItem.ToString().Split("(")[0])
+        $filepath = $filepath.Substring(0,$filepath.Length-1)
+        $disk = $vm | get-harddisk |where-object { $_.Filename -eq $filepath } -ErrorAction stop
+        if ($disk.ExtensionData.Backing.Sharing -eq "sharingMultiWriter")
+        {
+            $VMDKinUse = $false
+            $outputTextBox.text = ((get-Date -Format G) + " WARNING. VMDK is detected in Shared Multi-Writer Mode. Could be in use by another VM. Checking...`r`n$($outputTextBox.text)")
+            $vms = $disk |Get-Datastore| get-vm 
+            foreach ($vmdkVM in $vms)
+            {
+                $tempDisk = $vmdkVM |get-harddisk |where-object { $_.Filename -eq $filepath } -ErrorAction stop
+                if (($tempDisk -ne $null) -and ($vmdkVM.name -ne $vm.name))
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " RDM is also in use by VM $($vmdkVM.Name).`r`n$($outputTextBox.text)")
+                    $VMDKinUse = $true
+                }
+            }
+            if ($VMDKinUse -eq $true)
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " VMDK is detected as in-use by other VMs. Only removing VMDK from this VM, but not deleting it.`r`n$($outputTextBox.text)")
+                disk |remove-harddisk -Confirm:$false -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: VMDK removed.`r`n$($outputTextBox.text)")
+            }
+            else
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " No other VMs have been detected using this VMDK. Will continue with removing and deleting it.`r`n$($outputTextBox.text)")
+            }
+        }
+        if (($disk.ExtensionData.Backing.Sharing -ne "sharingMultiWriter") -or ($VMDKinUse -eq $false) )
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Removing VMDK from VM...`r`n$($outputTextBox.text)")
+            $disk | remove-harddisk -DeletePermanently -Confirm:$false -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: VMDK removed and deleted.`r`n$($outputTextBox.text)")
+        }
+        getDisks
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function deleteRDM{
+
+    try
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " Removing RDM and destroying the FlashArray volume...`r`n$($outputTextBox.text)")
+        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString() -ErrorAction stop
+        $naa = (($RDMDropDownBox.SelectedItem.ToString()).substring(0,36))
+        $disk = $vm | get-harddisk |where-object { $_.ScsiCanonicalName -eq $naa } -ErrorAction stop
+        if ($disk.ExtensionData.Backing.Sharing -eq "sharingMultiWriter")
+        {
+            $RDMinUse = $false
+            $outputTextBox.text = ((get-Date -Format G) + " WARNING. RDM is detected in Shared Multi-Writer Mode. Could be in use by another VM. Checking...`r`n$($outputTextBox.text)")
+            $vms = $disk |Get-Datastore| get-vm 
+            foreach ($rdmVM in $vms)
+            {
+                $tempDisk = $rdmVM |get-harddisk |where-object { $_.ScsiCanonicalName -eq $naa } -ErrorAction stop
+                if (($tempDisk -ne $null) -and ($rdmVM.name -ne $vm.Name))
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " RDM is also in use by VM $($rdmVM.Name).`r`n$($outputTextBox.text)")
+                    $RDMinUse = $true
+                }
+            }
+            if ($RDMinUse -eq $true)
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " RDM is detected as in-use by other VMs. Only removing RDM from this VM, but not deleting it.`r`n$($outputTextBox.text)")
+                $disk |remove-harddisk -Confirm:$false -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: RDM removed.`r`n$($outputTextBox.text)")
+            }
+            else
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " No other VMs have been detected using this RDM. Will continue with removing and deleting it.`r`n$($outputTextBox.text)")
+            }
+        }
+        if (($disk.ExtensionData.Backing.Sharing -ne "sharingMultiWriter") -or ($RDMinUse -eq $false) )
+        {
+            $disk |remove-harddisk -Confirm:$false -DeletePermanently -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " Removed RDM from VM. Now detaching the volume`r`n$($outputTextBox.text)")
+            $lun = $naa
+            $volumes = Get-PfaVolumes -Array $EndPoint
+            $volserial = ($lun.ToUpper()).substring(12)
+            $deletevol = $volumes | where-object { $_.serial -eq $volserial }
+            if ($deletevol -eq $null)
+            {
+                $outputTextBox.text =  "ERROR: Volume not found on connected FlashArray." + ("`r`n") + $outputTextBox.text
+                return
+            }
+            $esxihosts = get-vmhost
+            $hostsToDetach = @()
+            foreach ($esxihost in $esxihosts)
+            {
+               $scsilun = $esxihost | get-scsilun |where-object { $_.CanonicalName -eq $naa }
+               if ($scsilun.count -ne 0)
+               {
+                    $hostsToDetach += $esxihost
+               }
+            }
+            $outputTextBox.text = ((get-Date -Format G) + " Detaching device from hosts...`r`n$($outputTextBox.text)")
+            foreach ($esxihost in $hostsToDetach)
+            {
+                $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+                $storageSystem.DetachScsiLun($naa) 
+            }
+            $FAhostgroups = Get-PfaVolumeHostGroupConnections -Array $endpoint -VolumeName $deletevol.name | select -ExpandProperty hgroup |select-object -unique
+            $FAhosts = Get-PfaVolumeHostConnections -Array $endpoint -VolumeName $deletevol.name | select -ExpandProperty hgroup |select-object -unique
+            foreach ($FAhost in $FAhosts)
+            {
+                Remove-PfaHostVolumeConnection -Array $endpoint -VolumeName $deletevol.name -HostName $FAhost
+            }
+            foreach ($FAhostgroup in $FAhostgroups)
+            {
+                Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $deletevol.name -HostGroupName $FAhostgroup
+            }
+            Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $deletevol.name
+            $outputTextBox.text = ((get-Date -Format G) + " The FlashArray volume $($deletevol.name) has been deleted`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+            $hostsToDetach | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The RDM volume has been removed and destroyed.`r`n$($outputTextBox.text)")
+            getDisks
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function newSnapshot{  
+    try
+    {
+        if ($TabControl.SelectedIndex -eq 0)
+        {
+            $LabelNewSnapError.Text = ""
+            $datastore = get-datastore $DatastoreDropDownBox.SelectedItem.ToString()
+            $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+        }
+        elseif ($TabControl.SelectedIndex -eq 1) 
+        {
+            $LabelNewVMSnapError.Text = ""
+            if ($RadioButtonVM.Checked -eq $true)
+            {
+                $datastore = get-vm -Name $VMDropDownBox.SelectedItem.ToString() |Get-Datastore
+                $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+                if ($datastore.count -gt 1)
+                {
+                    throw "This VM uses more than one datastore and is not supported in this tool"
+                }
+            }
+            if ($RadioButtonVMDK.Checked -eq $true)
+            {
+                $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()
+                $datastore = get-datastore (($script:VMDKDropDownBox.SelectedItem.ToString() |foreach { $_.Split("]")[0] }).substring(1))
+                $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
+            }
+            if ($RadioButtonRDM.Checked -eq $true)
+            {
+                $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()
+                $script:lun = ($script:RDMDropDownBox.SelectedItem.ToString()).substring(0,36)
+            }
+        }
+        getFlashArray
+        if ($lun -like 'naa.624a9370*')
+        {
+            $volumes = Get-PfaVolumes -Array $EndPoint
+            $volserial = ($lun.ToUpper()).substring(12)
+            $script:purevol = $volumes | where-object { $_.serial -eq $volserial }
+            if ($purevol -eq $null)
+            {
+                $outputTextBox.text =  (get-Date -Format G) + " ERROR: Volume not found on connected FlashArray." + ("`r`n") + $outputTextBox.text
+            }
+            else
+            {
+                if ($TabControl.SelectedIndex -eq 0)
+                {
+                    $newSnapshot = New-PfaVolumeSnapshots -Array $EndPoint -Sources $purevol.name -Suffix $newSnapshotTextBox.Text -ErrorAction stop
+                    $newSnapshotTextBox.Text = ""
+                    $LabelNewSnapError.ForeColor = "Black"
+                    $LabelNewSnapError.Text = "$($newSnapshot.Name) ($($newSnapshot.Created))"
+                    $buttonNewSnapshot.Enabled = $false
+                    getSnapshots
+                }
+                elseif ($TabControl.SelectedIndex -eq 1)
+                {
+                    $newSnapshot = New-PfaVolumeSnapshots -Array $EndPoint -Sources $purevol.name -Suffix $newVMSnapshotTextBox.Text -ErrorAction stop
+                    $newVMSnapshotTextBox.Text = ""
+                    $LabelNewVMSnapError.ForeColor = "Black"
+                    $LabelNewVMSnapError.Text = "$($newSnapshot.Name) ($($newSnapshot.Created))"
+                    $buttonNewVMSnapshot.Enabled = $false
+                    getVMSnapshots
+                }    
+                $outputTextBox.text = ((get-Date -Format G) + " Created snapshot $($newSnapshot.Name)`r`n$($outputTextBox.text)")
+            }
+        }
+        else
+        {
+            $outputTextBox.text = (get-Date -Format G) + " Selected datastore is not a FlashArray volume." + ("`r`n") + $outputTextBox.text
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function newVMFS{
+    $script:createVMFS = $true
+    getHostGroup
+    try
+    {
+        $newvol = New-PfaVolume -Array $endpoints[$ChooseFlashArrayDropDownBox.SelectedIndex-1] -VolumeName $newVMFSTextBox.text -Size $($newVMFSSizeTextBox.text) $($UnitDropDownBox.SelectedItem.ToString())
+        $outputTextBox.text = ((get-Date -Format G) + " New FlashArray volume is $($newvol.name)`r`n$($outputTextBox.text)")
+        New-PfaHostGroupVolumeConnection -Array $endpoints[$ChooseFlashArrayDropDownBox.SelectedIndex-1] -VolumeName $newvol.name -HostGroupName $hostgroup
+        $outputTextBox.text = ((get-Date -Format G) + " Connected volume to host group $($hostgroup)`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+        $esxi = get-cluster -Name $CreateVMFSClusterDropDownBox.SelectedItem.ToString() | Get-VMHost -ErrorAction stop
+        $esxi | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+        $newNAA =  "naa.624a9370" + $newvol.serial.toLower()
+        $ESXiApiVersion = $esxi[0].ExtensionData.Summary.Config.Product.ApiVersion
+        if ($ESXiApiVersion -eq "6.5")
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Creating a VMFS 6 datastore...`r`n$($outputTextBox.text)")
+            $newVMFS = $esxi[0] |new-datastore -name $newVMFSTextBox.text -vmfs -Path $newNAA -FileSystemVersion 6
+        }
+        else
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Creating a VMFS 5 datastore...`r`n$($outputTextBox.text)")
+            $newVMFS = $esxi[0] |new-datastore -name $newVMFSTextBox.text -vmfs -Path $newNAA -FileSystemVersion 5
+        }
+        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: VMFS datastore $($newVMFSTextBox.text) created.`r`n$($outputTextBox.text)")
+        $newVMFSTextBox.Text = "" 
+        $newVMFSSizeTextBox.Text = ""
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " FAILED: Datastore creation failed.`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+        if ($newvol -ne $null)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Cleaning up volume... $($Error[0])`r`n$($outputTextBox.text)")
+            Remove-PfaHostGroupVolumeConnection -Array $endpoints[$ChooseFlashArrayDropDownBox.SelectedIndex-1] -VolumeName $newvol.name -HostGroupName $hostgroup
+            Remove-PfaVolumeOrSnapshot -Array $endpoints[$ChooseFlashArrayDropDownBox.SelectedIndex-1] -Name $newvol.name
+            Remove-PfaVolumeOrSnapshot -Array $endpoints[$ChooseFlashArrayDropDownBox.SelectedIndex-1] -Name $newvol.name -Eradicate
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)") 
+            $esxi | Get-VMHostStorage -RescanAllHba -RescanVMFS 
+            $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+        }
+    }
+    $script:createVMFS = $false
+}
+function cloneVMFS{
+    getFlashArray
+    getHostGroup
+    try
+    {
+        $snapshotchoice = $SnapshotDropDownBox.SelectedIndex -1
+        $volumename = $purevol.name + "-snap-" + (Get-Random -Minimum 1000 -Maximum 9999)
+        $newvol =New-PfaVolume -Array $endpoint -Source $snapshots[$snapshotchoice].name -VolumeName $volumename
+        $outputTextBox.text = ((get-Date -Format G) + " New FlashArray volume is $($newvol.name)`r`n$($outputTextBox.text)")
+        New-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+        $outputTextBox.text = ((get-Date -Format G) + " Connected volume to host group $($hostgroup)`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+        $cluster =  get-cluster -Name $RecoveryClusterDropDownBox.SelectedItem.ToString() -ErrorAction stop
+        $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+        $esxi = $cluster | Get-VMHost -ErrorAction stop
+        $esxcli=get-esxcli -VMHost $esxi[0] -v2 -ErrorAction stop
+        $resigargs =$esxcli.storage.vmfs.snapshot.list.createargs()
+        $sourceds = get-datastore $DatastoreDropDownBox.SelectedItem.ToString()
+        $resigargs.volumelabel = $sourceds.Name
+        Start-sleep -s 10
+        $unresolvedvmfs = $esxcli.storage.vmfs.snapshot.list.invoke($resigargs) 
+        if ($unresolvedvmfs.UnresolvedExtentCount -ge 2)
+        {
+            throw ("ERROR: There is more than one unresolved copy of the source VMFS named " + $sourceds.Name)
+        }
+        else
+        {
+            $resigOp = $esxcli.storage.vmfs.snapshot.resignature.createargs()
+            $resigOp.volumelabel = $resigargs.volumelabel
+            $outputTextBox.text = ((get-Date -Format G) + " Resignaturing the VMFS...`r`n$($outputTextBox.text)")
+            $esxcli.storage.vmfs.snapshot.resignature.invoke($resigOp)
+            Start-sleep -s 10
+            $cluster | Get-VMHost | Get-VMHostStorage -RescanVMFS -ErrorAction stop 
+            $datastores = $esxi[0] | Get-Datastore -ErrorAction stop
+            $recoverylun = ("naa.624a9370" + $newvol.serial)
+            foreach ($ds in $datastores)
+            {
+                $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
+                if ($naa -eq $recoverylun.ToLower())
+                {
+                    $resigds = $ds
+                }
+            } 
+            $resigds = $resigds | Set-Datastore -Name $volumename -ErrorAction stop
+            $outputTextBox.text = (get-Date -Format G) + " Presented copied VMFS named " + $resigds.name + ("`r`n") + $outputTextBox.text
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup recovered datastore...`r`n$($outputTextBox.text)")
+        if ($unresolvedvmfs.UnresolvedExtentCount -eq 1)
+        {
+            $esxihosts = $resigds |get-vmhost
+            foreach ($esxihost in $esxihosts)
+            {
+                $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	            $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+            }
+        }
+        Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+        $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+        $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+        return
+    } 
+}
+function restoreVMObject{
+    getFlashArray
+    $cloneObject = $false
+    if ($RadioButtonRDM.Checked -eq $false)
+    {
+        getHostGroup
+        try
+        {
+            $snapshotchoice = $VMSnapshotDropDownBox.SelectedIndex -1
+            $volumename = $purevol.name + "-snap-" + (Get-Random -Minimum 1000 -Maximum 9999)
+            $newvol =New-PfaVolume -Array $endpoint -Source $snapshots[$snapshotchoice].name -VolumeName $volumename
+            $outputTextBox.text = ((get-Date -Format G) + " New FlashArray volume is $($newvol.name)`r`n$($outputTextBox.text)")
+            New-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+            $outputTextBox.text = ((get-Date -Format G) + " Connected volume to host group $($hostgroup)`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+            $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+            $vm |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+            $cluster =  $vm |get-cluster
+            $esxi = $cluster | Get-VMHost -ErrorAction stop
+            $esxcli=get-esxcli -VMHost $esxi[0] -v2 -ErrorAction stop
+            $resigargs =$esxcli.storage.vmfs.snapshot.list.createargs()
+            $sourceds = $vm |get-datastore
+            if ($sourceds.count -eq 1)
+            {
+                $resigargs.volumelabel = $sourceds.Name
+            }
+            elseif ($RadioButtonVMDK.Checked -eq $true)
+            {
+                $vmdkpath = ($script:VMDKDropDownBox.SelectedItem.ToString().Split("(")[0])
+                $resigargs.volumelabel = ($vmdkpath.Split("]")[0]).substring(1)
+            }
+            elseif ($sourceds.count -gt 1)
+            {
+                throw "This VM has more than one datastore and is not a supported configuration for this tool" 
+            }
+            Start-sleep -s 10
+            $unresolvedvmfs = $esxcli.storage.vmfs.snapshot.list.invoke($resigargs) 
+            if ($unresolvedvmfs.UnresolvedExtentCount -ge 2)
+            {
+                throw ("ERROR: There is more than one unresolved copy of the source VMFS named " + $sourceds.Name)
+            }
+            else
+            {
+                $resigOp = $esxcli.storage.vmfs.snapshot.resignature.createargs()
+                $resigOp.volumelabel = $resigargs.volumelabel
+                $outputTextBox.text = ((get-Date -Format G) + " Resignaturing the VMFS...`r`n$($outputTextBox.text)")
+                $esxcli.storage.vmfs.snapshot.resignature.invoke($resigOp)
+                Start-sleep -s 10
+                $cluster | Get-VMHost | Get-VMHostStorage -RescanVMFS -ErrorAction stop 
+                $datastores = $esxi[0] | Get-Datastore -ErrorAction stop
+                $recoverylun = ("naa.624a9370" + $newvol.serial)
+                foreach ($ds in $datastores)
+                {
+                    $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
+                    if ($naa -eq $recoverylun.ToLower())
+                    {
+                        $resigds = $ds
+                    }
+                } 
+                $resigds = $resigds | Set-Datastore -Name $volumename -ErrorAction stop
+                $outputTextBox.text = (get-Date -Format G) + " Presented copied VMFS named " + $resigds.name + ("`r`n") + $outputTextBox.text
+            }
+        }
+        catch
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+            if (($sourceds.count -eq 1) -or ($RadioButtonVMDK.Checked -eq $true))
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup recovered datastore...`r`n$($outputTextBox.text)")
+                if ($unresolvedvmfs.UnresolvedExtentCount -eq 1)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                }
+                Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+ 
+            }
+            return 
+        }
+        if ($RadioButtonVM.Checked -eq $true)
+        {
+            try
+            {
+                $vmpath = $vm.extensiondata.Config.Files.VmPathName
+                $oldname = ($vmpath.Split("]")[0]).substring(1)
+                $vmpath = $vmpath -replace $oldname, $resigds.name 
+                if ($vm.ExtensionData.summary.runtime.powerState -eq "poweredOn")
+                {
+                    throw "The source VM is powered-on. Please shut it down prior to recovery"
+                }
+                else
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Registering VM from copied datastore...`r`n$($outputTextBox.text)")
+                    $newvm = New-VM -VMHost ($vm |Get-VMHost) -VMFilePath $vmpath -Name ("$($vm.Name)-copy") -ErrorAction stop
+                }
+                $outputTextBox.text = ((get-Date -Format G) + " Powering on recovered VM...`r`n$($outputTextBox.text)")
+                $newvm | start-vm -runasync -ErrorAction stop
+                Start-Sleep -Seconds 20
+                $newvm | Get-VMQuestion | Set-VMQuestion -DefaultOption -confirm:$false
+                $outputTextBox.text = ((get-Date -Format G) + " Removing original VM permanently...`r`n$($outputTextBox.text)")
+                Start-Sleep -Seconds 4
+                $vm |remove-vm -DeletePermanently -Confirm:$false -ErrorAction stop
+                Start-Sleep -Seconds 4
+                $newvm = $newvm | set-vm -name $vm.name -Confirm:$false  -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The VM has been recovered and the old VM has been deleted`r`n$($outputTextBox.text)")
+            }
+            catch
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup copied datastore...`r`n$($outputTextBox.text)")
+                if ((!$newvm) -ne $true)
+                {
+                    $cluster = $newvm |get-cluster
+                    $newvm  |remove-vm -DeletePermanently -Confirm:$false
+                }
+                if ($vms.count -eq 0)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                    Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                    $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                    $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                    $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)") 
+                } 
+                return
+            }
+            if ($migrateVMCheckBox.Checked -eq $true)
+            {
+                try
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Moving the VM to the original datastore...`r`n$($outputTextBox.text)")
+                    Move-vm -vm $newvm -Datastore (get-datastore $oldname) -Confirm:$false -ErrorAction stop
+                    $vms = $resigds |get-vm
+                    if ($vms.count -eq 0)
+                    {
+                        $esxihosts = $resigds |get-vmhost
+                        foreach ($esxihost in $esxihosts)
+                        {
+                            $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                        $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                        }
+                        Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                        $vm |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The VM has been moved and the temporary datastore has been deleted`r`n$($outputTextBox.text)")
+                        $migrateVMCheckBox.Checked = $false
+                    }
+                }
+                catch
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+                    return
+                }
+            }
+        }
+        if ($RadioButtonVMDK.Checked -eq $true)
+        {
+            try
+            {
+                $filepath = ($VMDKDropDownBox.SelectedItem.ToString().Split("(")[0])
+                $filepath = $filepath.Substring(0,$filepath.Length-1)
+                $disk = $vm | get-harddisk |where-object { $_.Filename -eq $filepath } -ErrorAction stop
+                $controller = $disk |Get-ScsiController -ErrorAction stop
+                $oldname = ($filepath.Split("]")[0]).substring(1)
+                $filepath = $filepath -replace $oldname, $resigds.name
+                $outputTextBox.text = ((get-Date -Format G) + " Removing old VMDK from VM...`r`n$($outputTextBox.text)")
+                $disk | remove-harddisk -DeletePermanently -Confirm:$false -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " Replacing VMDK from copied datastore...`r`n$($outputTextBox.text)")
+                $newDisk = $vm | new-harddisk -DiskPath $filepath -Controller $controller -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: VMDK replaced and restored.`r`n$($outputTextBox.text)")
+            }
+            catch
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup recovered datastore...`r`n$($outputTextBox.text)")
+                if ($vms.count -eq 0)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                    Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                    $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                    $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                    $vm |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                    $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+                } 
+                return
+            }
+            if ($migrateVMCheckBox.Checked -eq $true)
+            {
+                try
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Moving the VM to the original datastore...`r`n$($outputTextBox.text)")
+                    Move-HardDisk -HardDisk $newDisk -Datastore (get-datastore $oldname) -Confirm:$false -ErrorAction stop
+                    $vms = $resigds |get-vm
+                    if ($vms.count -eq 0)
+                    {
+                        $esxihosts = $resigds |get-vmhost
+                        foreach ($esxihost in $esxihosts)
+                        {
+                            $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                        $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                        }
+                        $outputTextBox.text = ((get-Date -Format G) + " Removing copied datastore...`r`n$($outputTextBox.text)")
+                        Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                        $vm |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+                        $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+                        $migrateVMCheckBox.Checked = $false
+                    }
+                }
+                catch
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+                    return
+                }
+            }
+        }
+    }
+}
+function restoreRDM{
+    getFlashArray
+    $cloneObject = $false
+    try
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " Refreshing RDM...`r`n$($outputTextBox.text)")
+        $snapshotchoice = $SnapshotDropDownBox.SelectedIndex
+        $vm = get-vm -Name $VMDropDownBox.SelectedItem.ToString() -ErrorAction stop
+        $naa = (($RDMDropDownBox.SelectedItem.ToString()).substring(0,36))
+        $disk = $vm | get-harddisk |where-object { $_.ScsiCanonicalName -eq $naa } -ErrorAction stop
+        $controller = $disk |Get-ScsiController -ErrorAction stop 
+        $outputTextBox.text = ((get-Date -Format G) + " Temporarily removing RDM from VM...`r`n$($outputTextBox.text)")
+        $disk |remove-harddisk -Confirm:$false -DeletePermanently -ErrorAction stop
+        $outputTextBox.text = ((get-Date -Format G) + " Removed RDM from VM.`r`n$($outputTextBox.text)") 
+        $outputTextBox.text = ((get-Date -Format G) + " Refreshing RDM from snapshot...`r`n$($outputTextBox.text)")
+        $newvol = New-PfaVolume -Array $endpoint -Source $snapshots[$snapshotchoice].name -VolumeName $purevol.name -Overwrite
+        $outputTextBox.text = ((get-Date -Format G) + " Adding RDM back to VM...`r`n$($outputTextBox.text)") 
+        $vm | new-harddisk -DeviceName "/vmfs/devices/disks/$($naa.toLower())" -DiskType RawPhysical -Controller $controller   -ErrorAction stop
+        $outputTextBox.text = ((get-Date -Format G) + " Added RDM back to VM.`r`n$($outputTextBox.text)") 
+        $outputTextBox.text = (get-Date -Format G) + " COMPLETE: Refreshed RDM on FlashArray volume $($newvol.name) from snapshot $($snapshots[$snapshotchoice].name) `r`n $($outputTextBox.text)"
+    }
+    catch
+    {
+        $outputTextBox.text = (get-Date -Format G) + " Failed to refresh RDM on FlashArray volume $($newvol.name) from snapshot $($snapshots[$snapshotchoice].name) `r`n $($outputTextBox.text)"
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+        return
+    }
+}
+function cloneVMObject{
+    getFlashArray
+    if ($RadioButtonRDM.Checked -eq $false)
+    {
+        $cloneObject = $true #tells gethostgroup what operation type is going on
+        getHostGroup
+        $cloneObject = $false
+        try
+        {
+            $snapshotchoice = $VMSnapshotDropDownBox.SelectedIndex -1
+            $volumename = $purevol.name + "-snap-" + (Get-Random -Minimum 1000 -Maximum 9999)
+            $newvol =New-PfaVolume -Array $endpoint -Source $snapshots[$snapshotchoice].name -VolumeName $volumename
+            $outputTextBox.text = ((get-Date -Format G) + " New FlashArray volume is $($newvol.name)`r`n$($outputTextBox.text)")
+            New-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+            $outputTextBox.text = ((get-Date -Format G) + " Connected volume to host group $($hostgroup)`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+            $sourceVM = get-vm -Name $VMDropDownBox.SelectedItem.ToString() -ErrorAction stop
+            if ($script:RadioButtonVM.Checked -eq $true)
+            {
+                $cluster = get-cluster -Name $TargetClusterDropDownBox.SelectedItem.ToString()
+                $targetVM = $sourceVM
+            }
+            elseif($script:RadioButtonVMDK.Checked -eq $true)
+            {
+                $targetVM = get-vm -Name $TargetVMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                $cluster =  $targetVM |get-cluster
+            }
+            $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+            $esxi = $cluster | Get-VMHost -ErrorAction stop
+            $esxcli=get-esxcli -VMHost $esxi[0] -v2 -ErrorAction stop
+            $resigargs =$esxcli.storage.vmfs.snapshot.list.createargs()
+            $sourceds = $sourceVM |get-datastore
+            if ($sourceds.count -eq 1)
+            {
+                $resigargs.volumelabel = $sourceds.Name
+            }
+            elseif ($RadioButtonVMDK.Checked -eq $true)
+            {
+                $vmdkpath = ($script:VMDKDropDownBox.SelectedItem.ToString().Split("(")[0])
+                $resigargs.volumelabel = ($vmdkpath.Split("]")[0]).substring(1)
+            }
+            elseif ($sourceds.count -gt 1)
+            {
+                throw "This VM has more than one datastore and is not a supported configuration for this tool" 
+            }
+            Start-sleep -s 10
+            $unresolvedvmfs = $esxcli.storage.vmfs.snapshot.list.invoke($resigargs) 
+            if ($unresolvedvmfs.UnresolvedExtentCount -ge 2)
+            {
+                throw ("ERROR: There is more than one unresolved copy of the source VMFS named " + $sourceds.Name)
+            }
+            else
+            {
+                $resigOp = $esxcli.storage.vmfs.snapshot.resignature.createargs()
+                $resigOp.volumelabel = $resigargs.volumelabel
+                $outputTextBox.text = ((get-Date -Format G) + " Resignaturing the VMFS...`r`n$($outputTextBox.text)")
+                $esxcli.storage.vmfs.snapshot.resignature.invoke($resigOp)
+                Start-sleep -s 10
+                $cluster | Get-VMHost | Get-VMHostStorage -RescanVMFS -ErrorAction stop 
+                $datastores = $esxi[0] | Get-Datastore -ErrorAction stop
+                $recoverylun = ("naa.624a9370" + $newvol.serial)
+                foreach ($ds in $datastores)
+                {
+                    $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
+                    if ($naa -eq $recoverylun.ToLower())
+                    {
+                        $resigds = $ds
+                    }
+                } 
+                $resigds = $resigds | Set-Datastore -Name $volumename -ErrorAction stop
+                $outputTextBox.text = (get-Date -Format G) + " Presented copied VMFS named " + $resigds.name + ("`r`n") + $outputTextBox.text
+            }
+        }
+        catch
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+            if (($sourceds.count -eq 1) -or ($RadioButtonVMDK.Checked -eq $true))
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup recovered datastore...`r`n$($outputTextBox.text)")
+                if ($unresolvedvmfs.UnresolvedExtentCount -eq 1)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                }
+                Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                $cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+            }
+            return 
+        }
+        if ($RadioButtonVM.Checked -eq $true)
+        {
+            try
+            {
+                $vmpath = $sourceVM.extensiondata.Config.Files.VmPathName
+                $oldname = ($vmpath.Split("]")[0]).substring(1)
+                $vmpath = $vmpath -replace $oldname, $resigds.name 
+                $outputTextBox.text = ((get-Date -Format G) + " Registering VM from copied datastore...`r`n$($outputTextBox.text)")
+                $newvm = New-VM -VMHost ($esxi[0]) -VMFilePath $vmpath -Name ("$($sourceVM.Name)-copy" + (Get-Random -Minimum 1000 -Maximum 9999)) -ErrorAction stop
+                $vmAdapters = $newvm | Get-NetworkAdapter
+                foreach ($vmAdapter in $vmAdapters)
+                {
+                    $vmAdapter.ExtensionData.AddressType = "Generated"
+                    $vmAdapter.ExtensionData.MacAddress = ""
+                    Set-NetworkAdapter $vmAdapter -confirm:$false
+                }
+                Remove-VM -VM $newvm -confirm:$false
+                $newvm = New-VM -VMHost ($esxi[0]) -VMFilePath $vmpath -Name ("$($sourceVM.Name)-copy" + (Get-Random -Minimum 1000 -Maximum 9999)) -ErrorAction stop
+                if ($TargetDatastoreDropDownBox.SelectedItem.ToString() -ne "<Keep on a New Recovery Datastore>")
+                {
+                    $targetDatastore = get-datastore -name $TargetDatastoreDropDownBox.SelectedItem.ToString()
+                }
+                else
+                {
+                    $targetDatastore = $newvm |get-datastore
+                }
+                $currentDatastore = $newvm |get-datastore
+                $migrateVM = $false
+                if ($targetDatastore -ne $currentDatastore)
+                {
+                    $migrateVM = $true
+                }
+                if ($migrateVM -eq $false)
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: A copy of the VM has been restored `r`n$($outputTextBox.text)")
+                }
+            }
+            catch
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup copied datastore...`r`n$($outputTextBox.text)")
+                if ($resigds)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                    Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                    $sourceVM = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                    $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                    $sourceVM |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                    $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+                } 
+                return 
+            }
+            if ($migrateVM -eq $true)
+            {
+                try
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Moving the VM to the original datastore...`r`n$($outputTextBox.text)")
+                    Move-vm -vm $newvm -Datastore ($targetDatastore) -Confirm:$false -ErrorAction stop
+                    $vms = $resigds |get-vm
+                    if ($vms.count -eq 0)
+                    {
+                        $esxihosts = $resigds |get-vmhost
+                        foreach ($esxihost in $esxihosts)
+                        {
+                            $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                        $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                        }
+                        $outputTextBox.text = ((get-Date -Format G) + " Removing temporary datastore...`r`n$($outputTextBox.text)")
+                        Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name 
+                        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                        $newvm |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The VM has been moved and the temporary datastore has been deleted`r`n$($outputTextBox.text)")
+                    }
+                }
+                catch
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+                    return
+                }
+            }
+        }
+        if ($RadioButtonVMDK.Checked -eq $true)
+        {
+            try
+            {
+                Start-Sleep -Seconds 6
+                $filepath = ($VMDKDropDownBox.SelectedItem.ToString().Split("(")[0])
+                $filepath = $filepath.Substring(0,$filepath.Length-1)
+                $disk = $sourceVM | get-harddisk |where-object { $_.Filename -eq $filepath } -ErrorAction stop
+                if ($targetVM -eq $sourceVM)
+                {
+                    $controller = $disk |Get-ScsiController -ErrorAction stop
+                }
+                else
+                {
+                    $controller = $targetVM |Get-ScsiController
+                    $controller = $controller[0]
+                }
+                $oldname = ($filepath.Split("]")[0]).substring(1)
+                $filepath = $filepath -replace $oldname, $resigds.name
+                $outputTextBox.text = ((get-Date -Format G) + " $($filepath)`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " Adding VMDK from copied datastore...`r`n$($outputTextBox.text)")
+                $vmDisks = $targetvm | get-harddisk
+                $vdm = get-view -id (get-view serviceinstance).content.virtualdiskmanager
+                $dc=$targetVM |get-datacenter 
+                $oldUUID=$vdm.queryvirtualdiskuuid($filePath, $dc.id)
+                foreach ($vmDisk in $vmDisks)
+                {
+                    $currentUUID=$vdm.queryvirtualdiskuuid($vmDisk.Filename, $dc.id)
+                    if ($currentUUID -eq $oldUUID)
+                    {
+                        $outputTextBox.text = ((get-Date -Format G) + " Found duplicate disk UUID on target VM. Assigning a new UUID to the copied VMDK`r`n$($outputTextBox.text)")
+                        $firstHalf = $oldUUID.split("-")[0]
+                        $testguid=[Guid]::NewGuid()
+                        $strGuid=[string]$testguid
+                        $arrGuid=$strGuid.split("-")
+                        $secondHalfTemp=$arrGuid[3]+$arrGuid[4]
+                        $halfUUID=$secondHalfTemp[0]+$secondHalfTemp[1]+" "+$secondHalfTemp[2]+$secondHalfTemp[3]+" "+$secondHalfTemp[4]+$secondHalfTemp[5]+" "+$secondHalfTemp[6]+$secondHalfTemp[7]+" "+$secondHalfTemp[8]+$secondHalfTemp[9]+" "+$secondHalfTemp[10]+$secondHalfTemp[11]+" "+$secondHalfTemp[12]+$secondHalfTemp[13]+" "+$secondHalfTemp[14]+$secondHalfTemp[15]
+                        $vdm.setVirtualDiskUuid($filePath, $dc.id, $firstHalf+"-"+$halfUUID)
+                        break
+                    }
+                }
+                $newDisk = $targetVM | new-harddisk -DiskPath $filepath -Controller $controller -ErrorAction stop
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: VMDK copy added to VM.`r`n$($outputTextBox.text)")
+            }
+            catch
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " Attempting to cleanup copied datastore...`r`n$($outputTextBox.text)")
+                if ($vms.count -eq 0)
+                {
+                    $esxihosts = $resigds |get-vmhost
+                    foreach ($esxihost in $esxihosts)
+                    {
+                        $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                    $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                        $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                    }
+                    Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                    Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                    $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                    $targetVM |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                    $outputTextBox.text = ((get-Date -Format G) + " The recovery datastore has been deleted`r`n$($outputTextBox.text)")
+                } 
+                return
+            }
+            if ($TargetDatastoreDropDownBox.SelectedItem.ToString() -ne "<Keep on a New Recovery Datastore>")
+            {
+                try
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Moving the VMDK to the original datastore...`r`n$($outputTextBox.text)")
+                    $targetDatastore = get-datastore -name $TargetDatastoreDropDownBox.SelectedItem.ToString()
+                    Move-HardDisk -HardDisk $newDisk -Datastore ($targetDatastore) -Confirm:$false -ErrorAction stop
+                    $vms = $resigds |get-vm
+                    if ($vms.count -eq 0)
+                    {
+                        $esxihosts = $resigds |get-vmhost
+                        foreach ($esxihost in $esxihosts)
+                        {
+                            $storageSystem = Get-View $esxihost.Extensiondata.ConfigManager.StorageSystem -ErrorAction stop
+	                        $StorageSystem.UnmountVmfsVolume($resigds.ExtensionData.Info.vmfs.uuid) 
+                            $storageSystem.DetachScsiLun((Get-ScsiLun -VmHost $esxihost | where {$_.CanonicalName -eq $resigds.ExtensionData.Info.Vmfs.Extent.DiskName}).ExtensionData.Uuid) 
+                        }
+                        $outputTextBox.text = ((get-Date -Format G) + " Removing copied datastore...`r`n$($outputTextBox.text)")
+                        Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+                        Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name -Eradicate
+                        $targetVM = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+                        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+                        $targetVM |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+                        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The VMDK has been moved and the temporary datastore has been deleted`r`n$($outputTextBox.text)")
+                    }
+                }
+                catch
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+                    return
+                }
+            }
+        }
+    }
+    if ($RadioButtonRDM.Checked -eq $true)
+    {
+        getHostGroup
+        try
+        {
+            $snapshotchoice = $VMSnapshotDropDownBox.SelectedIndex -1
+            $volumename = $purevol.name + "-snap-" + (Get-Random -Minimum 1000 -Maximum 9999)
+            $newvol =New-PfaVolume -Array $endpoint -Source $snapshots[$snapshotchoice].name -VolumeName $volumename
+            $outputTextBox.text = ((get-Date -Format G) + " Creating new volume from snapshot...`r`n$($outputTextBox.text)")
+            New-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+            $targetVM = get-vm -Name $TargetVMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning host...`r`n$($outputTextBox.text)")
+            $targetVM  | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop
+            Start-sleep -s 5
+            $recoverylun = ("naa.624a9370" + $newvol.serial)
+            $naa = (($RDMDropDownBox.SelectedItem.ToString()).substring(0,36))
+            $outputTextBox.text = ((get-Date -Format G) + "  $($naa)`r`n$($outputTextBox.text)") 
+            $controller = $targetVM|Get-ScsiController -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " Adding copied RDM to VM...`r`n$($outputTextBox.text)")
+            $targetVM | new-harddisk -DeviceName "/vmfs/devices/disks/$($recoverylun.toLower())" -DiskType RawPhysical -Controller $controller[0]  -ErrorAction stop
+            $outputTextBox.text = (get-Date -Format G) + " COMPLETE: Cloned RDM to FlashArray volume $($newvol.name) from snapshot $($snapshots[$snapshotchoice].name) and added to VM named $($targetVM.name) `r`n $($outputTextBox.text)" 
+        }
+        catch
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Error occurred, removing volume...`r`n$($outputTextBox.text)")
+            Remove-PfaHostGroupVolumeConnection -Array $endpoint -VolumeName $newvol.name -HostGroupName $hostgroup
+            Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newvol.name
+            $targetVM = get-vm -Name $VMDropDownBox.SelectedItem.ToString()  -ErrorAction stop
+            $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+            $targetVM |get-cluster | Get-VMHost | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop 
+            $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+            return
+        }
+    }
+}
+
+[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") 
+[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") 
+##################Main Form Definition
+    
+    $main_form = New-Object System.Windows.Forms.Form 
+    $main_form.Text = "Pure Storage FlashArray VMware Storage Manager" #Form Title
+    $main_form.Size = New-Object System.Drawing.Size(1000,920) 
+    $main_form.StartPosition = "CenterScreen"
+    $main_form.KeyPreview = $True
+    $main_form.AutoScroll = $True
+    $main_form.Add_KeyDown({if ($_.KeyCode -eq "Escape") 
+    {$main_form.Close()}})
+
+##################Tab Definition
+
+    $TabControl = New-object System.Windows.Forms.TabControl
+    $System_Drawing_Point = New-Object System.Drawing.Point
+    $System_Drawing_Point.X = 10
+    $System_Drawing_Point.Y = 370
+    $tabControl.Location = $System_Drawing_Point
+    $System_Drawing_Size = New-Object System.Drawing.Size
+    $System_Drawing_Size.Height = 340
+    $System_Drawing_Size.Width = 960
+    $tabControl.Size = $System_Drawing_Size
+    $TabControl.add_SelectedIndexChanged({enableObjects})
+    $main_form.Controls.Add($tabControl)
+    $TabControl.Enabled = $false
+    
+    $VMFSTab = New-Object System.Windows.Forms.TabPage
+    $VMFSTab.Text = "VMFS Management”
+    $tabControl.Controls.Add($VMFSTab)
+
+    $VMTab = New-Object System.Windows.Forms.TabPage
+    $VMTab.Text = "Virtual Machine Management”
+    $tabControl.Controls.Add($VMTab)
+
+
+################## Connection GroupBox Definition
+
+    $groupBoxVC = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVC.Location = New-Object System.Drawing.Size(10,5) 
+    $groupBoxVC.size = New-Object System.Drawing.Size(345,235) 
+    $groupBoxVC.text = "Connect to vCenter:" 
+    $main_form.Controls.Add($groupBoxVC) 
+
+    $groupBoxFA = New-Object System.Windows.Forms.GroupBox
+    $groupBoxFA.Location = New-Object System.Drawing.Size(370,5) 
+    $groupBoxFA.size = New-Object System.Drawing.Size(335,235) 
+    $groupBoxFA.text = "Connect to FlashArray(s):" 
+    $main_form.Controls.Add($groupBoxFA)
+
+    $groupBoxInfo = New-Object System.Windows.Forms.GroupBox
+    $groupBoxInfo.Location = New-Object System.Drawing.Size(720,5) 
+    $groupBoxInfo.size = New-Object System.Drawing.Size(250,360) 
+    $groupBoxInfo.text = "About:" 
+    $main_form.Controls.Add($groupBoxInfo)
+
+    $groupBoxRadio = New-Object System.Windows.Forms.GroupBox
+    $groupBoxRadio.Location = New-Object System.Drawing.Size(10,245) 
+    $groupBoxRadio.size = New-Object System.Drawing.Size(695,120) 
+    $groupBoxRadio.text = "Choose Object Type:" 
+    $main_form.Controls.Add($groupBoxRadio) 
+
+    $groupBoxLog = New-Object System.Windows.Forms.GroupBox
+    $groupBoxLog.Location = New-Object System.Drawing.Size(10,725) 
+    $groupBoxLog.size = New-Object System.Drawing.Size(960,145) 
+    $groupBoxLog.text = "Output:" 
+    $main_form.Controls.Add($groupBoxLog)
+
+################## VMFS GroupBox Definition
+
+    $groupBoxVMFS = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVMFS.Location = New-Object System.Drawing.Size(10,10) 
+    $groupBoxVMFS.size = New-Object System.Drawing.Size(935,95) 
+    $groupBoxVMFS.text = "Create New VMFS:" 
+    $VMFSTab.Controls.Add($groupBoxVMFS) 
+
+    $groupBoxManageVMFS = New-Object System.Windows.Forms.GroupBox
+    $groupBoxManageVMFS.Location = New-Object System.Drawing.Size(10,110) 
+    $groupBoxManageVMFS.size = New-Object System.Drawing.Size(930,200) 
+    $groupBoxManageVMFS.text = "Manage VMFS Snapshots:" 
+    $VMFSTab.Controls.Add($groupBoxManageVMFS) 
+
+    $groupBoxCreateVMFSSnapshot = New-Object System.Windows.Forms.GroupBox
+    $groupBoxCreateVMFSSnapshot.Location = New-Object System.Drawing.Size(200,70) 
+    $groupBoxCreateVMFSSnapshot.size = New-Object System.Drawing.Size(340,120) 
+    $groupBoxCreateVMFSSnapshot.text = "Create FlashArray Snapshot:" 
+    $groupBoxManageVMFS.Controls.Add($groupBoxCreateVMFSSnapshot)
+
+    $groupBoxDeleteVMFSSnapshot = New-Object System.Windows.Forms.GroupBox
+    $groupBoxDeleteVMFSSnapshot.Location = New-Object System.Drawing.Size(10,70) 
+    $groupBoxDeleteVMFSSnapshot.size = New-Object System.Drawing.Size(180,120) 
+    $groupBoxDeleteVMFSSnapshot.text = "Delete VMFS/Snapshot:" 
+    $groupBoxManageVMFS.Controls.Add($groupBoxDeleteVMFSSnapshot)
+    
+    $groupBoxVMFSClone = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVMFSClone.Location = New-Object System.Drawing.Size(550,70) 
+    $groupBoxVMFSClone.size = New-Object System.Drawing.Size(370,120) 
+    $groupBoxVMFSClone.text = "Clone VMFS from Snapshot:" 
+    $groupBoxManageVMFS.Controls.Add($groupBoxVMFSClone)
+
+################## VM GroupBox Definition
+
+    $groupBoxVM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVM.Location = New-Object System.Drawing.Size(10,10) 
+    $groupBoxVM.size = New-Object System.Drawing.Size(540,160) 
+    $groupBoxVM.text = "1) Select Virtual Machine Object:" 
+    $VMTab.Controls.Add($groupBoxVM) 
+
+    $groupBoxVMSnapshot = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVMSnapshot.Location = New-Object System.Drawing.Size(10,180) 
+    $groupBoxVMSnapshot.size = New-Object System.Drawing.Size(540,120) 
+    $groupBoxVMSnapshot.text = "2) Select Snapshot:" 
+    $VMTab.Controls.Add($groupBoxVMSnapshot) 
+
+    $groupBoxDeleteVMObject = New-Object System.Windows.Forms.GroupBox
+    $groupBoxDeleteVMObject.Location = New-Object System.Drawing.Size(555,10) 
+    $groupBoxDeleteVMObject.size = New-Object System.Drawing.Size(195,90) 
+    $groupBoxDeleteVMObject.text = "Delete Virtual Machine:" 
+    $VMTab.Controls.Add($groupBoxDeleteVMObject)
+
+    $groupBoxDeleteVMSnapshot = New-Object System.Windows.Forms.GroupBox
+    $groupBoxDeleteVMSnapshot.Location = New-Object System.Drawing.Size(755,10) 
+    $groupBoxDeleteVMSnapshot.size = New-Object System.Drawing.Size(195,90) 
+    $groupBoxDeleteVMSnapshot.text = "Delete Snapshot:" 
+    $VMTab.Controls.Add($groupBoxDeleteVMSnapshot)
+        
+    $groupBoxVMDK = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVMDK.Location = New-Object System.Drawing.Size(20,85) 
+    $groupBoxVMDK.size = New-Object System.Drawing.Size(500,50) 
+    $groupBoxVMDK.text = "Virtual Disk:" 
+    
+    $groupBoxRDM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxRDM.Location = New-Object System.Drawing.Size(20,85) 
+    $groupBoxRDM.size = New-Object System.Drawing.Size(500,50) 
+    $groupBoxRDM.text = "Raw Device Mapping:" 
+
+    $groupBoxRecoverVM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxRecoverVM.Location = New-Object System.Drawing.Size(555,110) 
+    $groupBoxRecoverVM.size = New-Object System.Drawing.Size(395,190) 
+    $groupBoxRecoverVM.text = "Restore/Clone Virtual Machine:" 
+    $VMTab.Controls.Add($groupBoxRecoverVM)
+    
+    $groupBoxRestoreVM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxRestoreVM.Location = New-Object System.Drawing.Size(10,20) 
+    $groupBoxRestoreVM.size = New-Object System.Drawing.Size(375,50) 
+    $groupBoxRestoreVM.text = "Restore:" 
+    $groupBoxRecoverVM.Controls.Add($groupBoxRestoreVM)
+
+    $groupBoxRestoreRDM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxRestoreRDM.Location = New-Object System.Drawing.Size(10,20) 
+    $groupBoxRestoreRDM.size = New-Object System.Drawing.Size(375,50) 
+    $groupBoxRestoreRDM.text = "Restore:" 
+    
+    $groupBoxCloneVM = New-Object System.Windows.Forms.GroupBox
+    $groupBoxCloneVM.Location = New-Object System.Drawing.Size(10,80) 
+    $groupBoxCloneVM.size = New-Object System.Drawing.Size(375,100) 
+    $groupBoxCloneVM.text = "Clone:" 
+    $groupBoxRecoverVM.Controls.Add($groupBoxCloneVM)
+
+    ################## Radio Select Definition
+
+    $RadioButtonVM = New-Object System.Windows.Forms.RadioButton #create the radio button
+    $RadioButtonVM.Location = new-object System.Drawing.Point(20,22) #location of the radio button(px) in relation to the group box's edges (length, height)
+    $RadioButtonVM.size = New-Object System.Drawing.Size(150,20) #the size in px of the radio button (length, height)
+    $RadioButtonVM.Text = "Entire Virtual Machine" #labeling the radio button
+    $RadioButtonVM.Enabled = $false
+    $RadioButtonVM.add_CheckedChanged({radioSelectChanged})
+    $groupBoxVM.Controls.Add($RadioButtonVM) #activate the inside the group box
+
+    $RadioButtonVMDK = New-Object System.Windows.Forms.RadioButton #create the radio button
+    $RadioButtonVMDK.Location = new-object System.Drawing.Point(170,22) #location of the radio button(px) in relation to the group box's edges (length, height)
+    $RadioButtonVMDK.size = New-Object System.Drawing.Size(130,20) #the size in px of the radio button (length, height)
+    $RadioButtonVMDK.Text = "Specific Virtual Disk" #labeling the radio button
+    $RadioButtonVMDK.Enabled = $false
+    $RadioButtonVMDK.add_CheckedChanged({radioSelectChanged})
+    $groupBoxVM.Controls.Add($RadioButtonVMDK) #activate the inside the group box
+
+    $RadioButtonRDM = New-Object System.Windows.Forms.RadioButton #create the radio button
+    $RadioButtonRDM.Location = new-object System.Drawing.Point(320,22) #location of the radio button(px) in relation to the group box's edges (length, height)
+    $RadioButtonRDM.size = New-Object System.Drawing.Size(180,20) #the size in px of the radio button (length, height)
+    $RadioButtonRDM.Text = "Specific Raw Device Mapping" #labeling the radio button
+    $RadioButtonRDM.Enabled = $false
+    $RadioButtonRDM.add_CheckedChanged({radioSelectChanged})
+    $groupBoxVM.Controls.Add($RadioButtonRDM) #activate the inside the group box
+
+
+################## Connection Label Definition
+
+    $LabelVC = New-Object System.Windows.Forms.Label
+    $LabelVC.Location = New-Object System.Drawing.Point(10, 20)
+    $LabelVC.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelVC.Text = "IP Address or FQDN:"
+    $groupBoxVC.Controls.Add($LabelVC) 
+
+    $LabelVCuser = New-Object System.Windows.Forms.Label
+    $LabelVCuser.Location = New-Object System.Drawing.Point(10, 70)
+    $LabelVCuser.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelVCuser.Text = "Username:"
+    $groupBoxVC.Controls.Add($LabelVCuser) 
+
+    $LabelVCpass = New-Object System.Windows.Forms.Label
+    $LabelVCpass.Location = New-Object System.Drawing.Point(10, 120)
+    $LabelVCpass.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelVCpass.Text = "Password:"
+    $groupBoxVC.Controls.Add($LabelVCpass) 
+          
+    $LabelFA = New-Object System.Windows.Forms.Label
+    $LabelFA.Location = New-Object System.Drawing.Point(10, 50)
+    $LabelFA.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelFA.Text = "IP Address or FQDN:"
+    $groupBoxFA.Controls.Add($LabelFA)
+    
+    $LabelFAuser = New-Object System.Windows.Forms.Label
+    $LabelFAuser.Location = New-Object System.Drawing.Point(10, 100)
+    $LabelFAuser.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelFAuser.Text = "Username:"
+    $groupBoxFA.Controls.Add($LabelFAuser) 
+
+    $LabelFApass = New-Object System.Windows.Forms.Label
+    $LabelFApass.Location = New-Object System.Drawing.Point(10, 150)
+    $LabelFApass.Size = New-Object System.Drawing.Size(120, 14)
+    $LabelFApass.Text = "Password:"
+    $groupBoxFA.Controls.Add($LabelFApass) 
+
+    $LabelAbout = New-Object System.Windows.Forms.Label
+    $LabelAbout.Location = New-Object System.Drawing.Point(10, 20)
+    $LabelAbout.Size = New-Object System.Drawing.Size(190, 300)
+    $LabelAbout.Text = "Pure Storage FlashArray VMware Storage Manager`r`n`r`nVersion 2.0.0`r`n`r`nBy Cody Hosterman`r`n`r`nwww.codyhosterman.com`r`n`r`n@codyhosterman`r`n`r`nRequires:`r`n---------------------------------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+`r`n`r`nFlashArray//M or`r`n`r`nFlashArray 400 Series`r`n`r`nhttps://github.com/codyhosterman/powercli/blob/master/PureStorageVMwareRecoveryTool.ps1"
+    $groupBoxInfo.Controls.Add($LabelAbout)  
+
+    $LabelClusterFilter = New-Object System.Windows.Forms.Label
+    $LabelClusterFilter.Location = New-Object System.Drawing.Point(10, 52)
+    $LabelClusterFilter.Size = New-Object System.Drawing.Size(80, 14)
+    $LabelClusterFilter.Text = "Cluster Filter:"
+    $groupBoxRadio.Controls.Add($LabelClusterFilter)  
+
+    $LabelExplainFilter = New-Object System.Windows.Forms.Label
+    $LabelExplainFilter.Location = New-Object System.Drawing.Point(10, 22)
+    $LabelExplainFilter.Size = New-Object System.Drawing.Size(500, 14)
+    $LabelExplainFilter.Text = "Optionally choose a cluster to filter VMFS/VM results and/or a string to filter by the VMFS/VM name."
+    $groupBoxRadio.Controls.Add($LabelExplainFilter) 
+
+    $LabelNameFilter = New-Object System.Windows.Forms.Label
+    $LabelNameFilter.Location = New-Object System.Drawing.Point(10, 87)
+    $LabelNameFilter.Size = New-Object System.Drawing.Size(70, 14)
+    $LabelNameFilter.Text = "Name Filter:"
+    $groupBoxRadio.Controls.Add($LabelNameFilter)
+
+################## VMFS Label Definition
+
+    $LabelCluster = New-Object System.Windows.Forms.Label
+    $LabelCluster.Location = New-Object System.Drawing.Point(410, 62)
+    $LabelCluster.Size = New-Object System.Drawing.Size(80, 28)
+    $LabelCluster.Text = "Target Cluster:"
+    $groupBoxVMFS.Controls.Add($LabelCluster)
+
+    $LabelCluster = New-Object System.Windows.Forms.Label
+    $LabelCluster.Location = New-Object System.Drawing.Point(10, 40)
+    $LabelCluster.Size = New-Object System.Drawing.Size(80, 28)
+    $LabelCluster.Text = "Target Cluster:"
+    $groupBoxVMFSClone.Controls.Add($LabelCluster)
+
+    $LabelNewSnapError = New-Object System.Windows.Forms.Label
+    $LabelNewSnapError.Location = New-Object System.Drawing.Point(10, 69)
+    $LabelNewSnapError.Size = New-Object System.Drawing.Size(400, 13)
+    $LabelNewSnapError.Text = ""
+    $groupBoxCreateVMFSSnapshot.Controls.Add($LabelNewSnapError)
+
+    $LabelNewSnap = New-Object System.Windows.Forms.Label
+    $LabelNewSnap.Location = New-Object System.Drawing.Point(10, 23)
+    $LabelNewSnap.Size = New-Object System.Drawing.Size(110, 14)
+    $LabelNewSnap.Text = "New snapshot name:"
+    $groupBoxCreateVMFSSnapshot.Controls.Add($LabelNewSnap)
+
+    $LabelNewVMFSError = New-Object System.Windows.Forms.Label
+    $LabelNewVMFSError.Location = New-Object System.Drawing.Point(95, 42)
+    $LabelNewVMFSError.Size = New-Object System.Drawing.Size(400, 14)
+    $LabelNewVMFSError.Text = ""
+    $groupBoxVMFS.Controls.Add($LabelNewVMFSError)
+
+    $LabelNewVMFSSizeError = New-Object System.Windows.Forms.Label
+    $LabelNewVMFSSizeError.Location = New-Object System.Drawing.Point(490, 42)
+    $LabelNewVMFSSizeError.Size = New-Object System.Drawing.Size(400, 14)
+    $LabelNewVMFSSizeError.Text = ""
+    $groupBoxVMFS.Controls.Add($LabelNewVMFSSizeError)
+
+    $LabelNewVMFS = New-Object System.Windows.Forms.Label
+    $LabelNewVMFS.Location = New-Object System.Drawing.Point(10, 23)
+    $LabelNewVMFS.Size = New-Object System.Drawing.Size(76, 14)
+    $LabelNewVMFS.Text = "Name:"
+    $groupBoxVMFS.Controls.Add($LabelNewVMFS)
+
+    $LabelChooseFA = New-Object System.Windows.Forms.Label
+    $LabelChooseFA.Location = New-Object System.Drawing.Point(10, 62)
+    $LabelChooseFA.Size = New-Object System.Drawing.Size(66, 14)
+    $LabelChooseFA.Text = "FlashArray:"
+    $groupBoxVMFS.Controls.Add($LabelChooseFA)
+
+    $LabelNewVMFSSize = New-Object System.Windows.Forms.Label
+    $LabelNewVMFSSize.Location = New-Object System.Drawing.Point(410, 23)
+    $LabelNewVMFSSize.Size = New-Object System.Drawing.Size(60, 14)
+    $LabelNewVMFSSize.Text = "Capacity:"
+    $groupBoxVMFS.Controls.Add($LabelNewVMFSSize)
+
+    $LabelChooseVMFS = New-Object System.Windows.Forms.Label
+    $LabelChooseVMFS.Location = New-Object System.Drawing.Point(10, 24)
+    $LabelChooseVMFS.Size = New-Object System.Drawing.Size(73, 14)
+    $LabelChooseVMFS.Text = "Select VMFS:"
+    $groupBoxManageVMFS.Controls.Add($LabelChooseVMFS)
+
+    $LabelChooseSnapshot = New-Object System.Windows.Forms.Label
+    $LabelChooseSnapshot.Location = New-Object System.Drawing.Point(395, 24)
+    $LabelChooseSnapshot.Size = New-Object System.Drawing.Size(90, 14)
+    $LabelChooseSnapshot.Text = "Select Snapshot:"
+    $groupBoxManageVMFS.Controls.Add($LabelChooseSnapshot)
+
+################## VM Label Definition
+
+    $LabelVM = New-Object System.Windows.Forms.Label
+    $LabelVM.Location = New-Object System.Drawing.Point(10, 60)
+    $LabelVM.Size = New-Object System.Drawing.Size(50, 14)
+    $LabelVM.Text = "Select:"
+    $groupBoxVM.Controls.Add($LabelVM)
+
+    $LabelChooseVMSnapshot = New-Object System.Windows.Forms.Label
+    $LabelChooseVMSnapshot.Location = New-Object System.Drawing.Point(10, 30)
+    $LabelChooseVMSnapshot.Size = New-Object System.Drawing.Size(50, 14)
+    $LabelChooseVMSnapshot.Text = "Select:"
+    $groupBoxVMSnapshot.Controls.Add($LabelChooseVMSnapshot)
+
+    $LabelNewVMSnap = New-Object System.Windows.Forms.Label
+    $LabelNewVMSnap.Location = New-Object System.Drawing.Point(10, 73)
+    $LabelNewVMSnap.Size = New-Object System.Drawing.Size(110, 14)
+    $LabelNewVMSnap.Text = "New snapshot name:"
+    $groupBoxVMSnapshot.Controls.Add($LabelNewVMSnap)
+
+    $LabelNewVMSnapError = New-Object System.Windows.Forms.Label
+    $LabelNewVMSnapError.Location = New-Object System.Drawing.Point(130, 92)
+    $LabelNewVMSnapError.Size = New-Object System.Drawing.Size(300, 13)
+    $LabelNewVMSnapError.Text = ""
+    $groupBoxVMSnapshot.Controls.Add($LabelNewVMSnapError)
+
+    $LabelTargetVM = New-Object System.Windows.Forms.Label
+    $LabelTargetVM.Size = New-Object System.Drawing.Size(80, 14)
+    $LabelTargetVM.Text = "Target VM:"
+
+    $LabelTargetDatastore = New-Object System.Windows.Forms.Label
+    $LabelTargetDatastore.Size = New-Object System.Drawing.Size(80, 14)
+    $LabelTargetDatastore.Text = "Target VMFS:"
+
+    $LabelTargetCluster = New-Object System.Windows.Forms.Label
+    $LabelTargetCluster.Size = New-Object System.Drawing.Size(80, 14)
+    $LabelTargetCluster.Text = "Target Cluster:"
+
+##################Connection Button Definition
+
+    $buttonConnect = New-Object System.Windows.Forms.Button
+    $buttonConnect.add_click({connectServer})
+    $buttonConnect.Text = "Connect"
+    $buttonConnect.Top=170
+    $buttonConnect.Left=7
+    $buttonConnect.Enabled = $false #Disabled by default
+    $groupBoxVC.Controls.Add($buttonConnect) #Member of groupBoxVC
+
+    $buttonDisconnect = New-Object System.Windows.Forms.Button
+    $buttonDisconnect.add_click({disconnectServer})
+    $buttonDisconnect.Text = "Disconnect"
+    $buttonDisconnect.Top=170
+    $buttonDisconnect.Left=235
+    $buttonDisconnect.Enabled = $false #Disabled by default
+    $groupBoxVC.Controls.Add($buttonDisconnect) #Member of groupBoxVC
+
+    $flasharrayButtonConnect = New-Object System.Windows.Forms.Button
+    $flasharrayButtonConnect.add_click({connectFlashArray})
+    $flasharrayButtonConnect.Text = "Connect"
+    $flasharrayButtonConnect.Top=200
+    $flasharrayButtonConnect.Left=7
+    $flasharrayButtonConnect.Enabled = $false #Disabled by default
+    $groupBoxFA.Controls.Add($flasharrayButtonConnect) #Member of groupBoxFA
+
+    $flasharrayButtonDisconnect = New-Object System.Windows.Forms.Button
+    $flasharrayButtonDisconnect.add_click({disconnectFlashArray})
+    $flasharrayButtonDisconnect.Text = "Disconnect"
+    $flasharrayButtonDisconnect.Top=200
+    $flasharrayButtonDisconnect.Left=235
+    $flasharrayButtonDisconnect.Enabled = $false #Disabled by default
+    $groupBoxFA.Controls.Add($flasharrayButtonDisconnect) #Member of groupBoxFA
+
+    ##################VMFS Button Definition
+
+    $buttonDatastores = New-Object System.Windows.Forms.Button
+    $buttonDatastores.add_click({getDatastores})
+    $buttonDatastores.Text = "Refresh"
+    $buttonDatastores.Top=20
+    $buttonDatastores.Left=330
+    $buttonDatastores.Width=55
+    $buttonDatastores.Enabled = $false #Disabled by default
+    $groupBoxManageVMFS.Controls.Add($buttonDatastores)
+
+    $buttonDeleteVMFS = New-Object System.Windows.Forms.Button
+    $buttonDeleteVMFS.add_click({deleteVMFS})
+    $buttonDeleteVMFS.Text = "Delete VMFS"
+    $buttonDeleteVMFS.Top=70
+    $buttonDeleteVMFS.Left=40
+    $buttonDeleteVMFS.Width=100
+    $buttonDeleteVMFS.Enabled = $false #Disabled by default
+    $groupBoxDeleteVMFSSnapshot.Controls.Add($buttonDeleteVMFS)
+      
+    $buttonSnapshots = New-Object System.Windows.Forms.Button
+    $buttonSnapshots.add_click({getSnapshots})
+    $buttonSnapshots.Text = "Refresh"
+    $buttonSnapshots.Top=20
+    $buttonSnapshots.Left=865
+    $buttonSnapshots.Width=55
+    $buttonSnapshots.Enabled = $false #Disabled by default
+    $groupBoxManageVMFS.Controls.Add($buttonSnapshots) 
+
+    $buttonNewSnapshot = New-Object System.Windows.Forms.Button
+    $buttonNewSnapshot.add_click({newSnapshot})
+    $buttonNewSnapshot.Text = "Create Snapshot"
+    $buttonNewSnapshot.Top=85
+    $buttonNewSnapshot.Left=210
+    $buttonNewSnapshot.Width=100
+    $buttonNewSnapshot.Enabled = $false #Disabled by default
+    $groupBoxCreateVMFSSnapshot.Controls.Add($buttonNewSnapshot) 
+
+    $buttonNewVMFS = New-Object System.Windows.Forms.Button
+    $buttonNewVMFS.add_click({newVMFS})
+    $buttonNewVMFS.Text = "Create VMFS"
+    $buttonNewVMFS.Top=59
+    $buttonNewVMFS.Left=815
+    $buttonNewVMFS.Width=85
+    $buttonNewVMFS.Enabled = $false #Disabled by default
+    $groupBoxVMFS.Controls.Add($buttonNewVMFS) 
+    
+    $buttonRecover = New-Object System.Windows.Forms.Button
+    $buttonRecover.add_click({cloneVMFS})
+    $buttonRecover.Text = "Clone VMFS"
+    $buttonRecover.Top=80
+    $buttonRecover.Left=110
+    $buttonRecover.Width=120
+    $buttonRecover.Enabled = $false #Disabled by default
+    $groupBoxVMFSClone.Controls.Add($buttonRecover) 
+
+    $buttonDelete = New-Object System.Windows.Forms.Button
+    $buttonDelete.add_click({deleteSnapshot})
+    $buttonDelete.Text = "Delete Snapshot"
+    $buttonDelete.Top=30
+    $buttonDelete.Left=40
+    $buttonDelete.Width=100
+    $buttonDelete.Enabled = $false #Disabled by default
+    $groupBoxDeleteVMFSSnapshot.Controls.Add($buttonDelete) 
+
+    ##################VM Button Definition
+
+    $buttonVMs = New-Object System.Windows.Forms.Button
+    $buttonVMs.add_click({getVMs})
+    $buttonVMs.Text = "Refresh"
+    $buttonVMs.Top=54
+    $buttonVMs.Left=475
+    $buttonVMs.Width=55
+    $buttonVMs.Enabled = $false #Disabled by default
+    $groupBoxVM.Controls.Add($buttonVMs) 
+
+    $buttonNewVMSnapshot = New-Object System.Windows.Forms.Button
+    $buttonNewVMSnapshot.add_click({newSnapshot})
+    $buttonNewVMSnapshot.Text = "Create Snapshot"
+    $buttonNewVMSnapshot.Top=69
+    $buttonNewVMSnapshot.Left=430
+    $buttonNewVMSnapshot.Width=100
+    $buttonNewVMSnapshot.Enabled = $false #Disabled by default
+    $groupBoxVMSnapshot.Controls.Add($buttonNewVMSnapshot) 
+
+    $buttonDeleteVM = New-Object System.Windows.Forms.Button
+    $buttonDeleteVM.add_click({deleteVMObject})
+    $buttonDeleteVM.Text = "Delete VM"
+    $buttonDeleteVM.Top=55
+    $buttonDeleteVM.Left=55
+    $buttonDeleteVM.Width=90
+    $buttonDeleteVM.Enabled = $false #Disabled by default
+    $groupBoxDeleteVMObject.Controls.Add($buttonDeleteVM) 
+
+    $buttonDeleteVMSnapshot = New-Object System.Windows.Forms.Button
+    $buttonDeleteVMSnapshot.add_click({deleteVMsnapshot})
+    $buttonDeleteVMSnapshot.Text = "Delete Snapshot"
+    $buttonDeleteVMSnapshot.Top=55
+    $buttonDeleteVMSnapshot.Left=45
+    $buttonDeleteVMSnapshot.Width=100
+    $buttonDeleteVMSnapshot.Enabled = $false #Disabled by default
+    $groupBoxDeleteVMSnapshot.Controls.Add($buttonDeleteVMSnapshot) 
+
+    $buttonGetVMSnapshots = New-Object System.Windows.Forms.Button
+    $buttonGetVMSnapshots.add_click({getVMSnapshots})
+    $buttonGetVMSnapshots.Text = "Refresh"
+    $buttonGetVMSnapshots.Top=24
+    $buttonGetVMSnapshots.Left=475
+    $buttonGetVMSnapshots.Width=55
+    $buttonGetVMSnapshots.Enabled = $false #Disabled by default
+    $groupBoxVMSnapshot.Controls.Add($buttonGetVMSnapshots)
+
+    $buttonRestoreVM = New-Object System.Windows.Forms.Button
+    $buttonRestoreVM.add_click({restoreVMObject})
+    $buttonRestoreVM.Text = "Restore from Snapshot"
+    $buttonRestoreVM.Top=17
+    $buttonRestoreVM.Left=235
+    $buttonRestoreVM.Width=130
+    $buttonRestoreVM.Enabled = $false #Disabled by default
+    $groupBoxRestoreVM.Controls.Add($buttonRestoreVM)
+
+    $buttonRestoreRDM = New-Object System.Windows.Forms.Button
+    $buttonRestoreRDM.add_click({restoreRDM})
+    $buttonRestoreRDM.Text = "Restore from Snapshot"
+    $buttonRestoreRDM.Top=17
+    $buttonRestoreRDM.Left=135
+    $buttonRestoreRDM.Width=130
+    $buttonRestoreRDM.Enabled = $false #Disabled by default
+    $groupBoxRestoreRDM.Controls.Add($buttonRestoreRDM)
+
+    $buttonCloneVM = New-Object System.Windows.Forms.Button
+    $buttonCloneVM.add_click({cloneVMObject})
+    $buttonCloneVM.Text = "Clone from Snapshot"
+    $buttonCloneVM.Top=70
+    $buttonCloneVM.Left=100
+    $buttonCloneVM.Width=130
+    $buttonCloneVM.Enabled = $false #Disabled by default
+    $groupBoxCloneVM.Controls.Add($buttonCloneVM)
+
+##################Connection TextBox Definition
+
+    $serverTextBox = New-Object System.Windows.Forms.TextBox 
+    $serverTextBox.Location = New-Object System.Drawing.Size(10,40)
+    $serverTextBox.Size = New-Object System.Drawing.Size(300,20)
+    $serverTextBox.add_TextChanged({isVCTextChanged}) 
+    $groupBoxVC.Controls.Add($serverTextBox) 
+
+    $usernameTextBox = New-Object System.Windows.Forms.TextBox 
+    $usernameTextBox.Location = New-Object System.Drawing.Size(10,90)
+    $usernameTextBox.Size = New-Object System.Drawing.Size(300,20) 
+    $usernameTextBox.add_TextChanged({isVCTextChanged}) 
+    $groupBoxVC.Controls.Add($usernameTextBox) 
+
+    $passwordTextBox = New-Object System.Windows.Forms.MaskedTextBox
+    $passwordTextBox.PasswordChar = '*'
+    $passwordTextBox.Location = New-Object System.Drawing.Size(10,140)
+    $passwordTextBox.Size = New-Object System.Drawing.Size(300,20)
+    $passwordTextBox.add_TextChanged({isVCTextChanged}) 
+    $groupBoxVC.Controls.Add($passwordTextBox) 
+
+    $outputTextBox = New-Object System.Windows.Forms.TextBox 
+    $outputTextBox.Location = New-Object System.Drawing.Size(10,20)
+    $outputTextBox.Size = New-Object System.Drawing.Size(940,115)
+    $outputTextBox.MultiLine = $True 
+    $outputTextBox.ReadOnly = $True
+    $outputTextBox.ScrollBars = "Vertical"
+    $outputTextBox.text = " "  
+    $groupBoxLog.Controls.Add($outputTextBox) 
+
+    $flasharrayTextBox = New-Object System.Windows.Forms.TextBox 
+    $flasharrayTextBox.Location = New-Object System.Drawing.Size(10,70)
+    $flasharrayTextBox.Size = New-Object System.Drawing.Size(300,20) 
+    $flasharrayTextBox.add_TextChanged({isFATextChanged}) 
+    $groupBoxFA.Controls.Add($flasharrayTextBox) 
+
+    $flasharrayUsernameTextBox = New-Object System.Windows.Forms.TextBox 
+    $flasharrayUsernameTextBox.Location = New-Object System.Drawing.Size(10,120)
+    $flasharrayUsernameTextBox.Size = New-Object System.Drawing.Size(300,20)
+    $flasharrayUsernameTextBox.add_TextChanged({isFATextChanged}) 
+    $groupBoxFA.Controls.Add($flasharrayUsernameTextBox) 
+
+    $flasharrayPasswordTextBox = New-Object System.Windows.Forms.MaskedTextBox
+    $flasharrayPasswordTextBox.PasswordChar = '*'
+    $flasharrayPasswordTextBox.Location = New-Object System.Drawing.Size(10,170)
+    $flasharrayPasswordTextBox.Size = New-Object System.Drawing.Size(300,20)
+    $flasharrayPasswordTextBox.add_TextChanged({isFATextChanged})    
+    $groupBoxFA.Controls.Add($flasharrayPasswordTextBox) 
+
+    $nameFilterTextBox = New-Object System.Windows.Forms.MaskedTextBox
+    $nameFilterTextBox.Location = New-Object System.Drawing.Size(100,87)
+    $nameFilterTextBox.Size = New-Object System.Drawing.Size(460,20)
+    $nameFilterTextBox.Enabled = $false
+    $groupBoxRadio.Controls.Add($nameFilterTextBox) 
+
+##################VMFS TextBox Definition
+
+    $newSnapshotTextBox = New-Object System.Windows.Forms.TextBox 
+    $newSnapshotTextBox.Location = New-Object System.Drawing.Size(10,46)
+    $newSnapshotTextBox.Size = New-Object System.Drawing.Size(280,20) 
+    $newSnapshotTextBox.add_TextChanged({isSnapshotTextChanged}) 
+    $newSnapshotTextBox.Enabled = $false
+    $groupBoxCreateVMFSSnapshot.Controls.Add($newSnapshotTextBox) 
+
+    $newVMFSTextBox = New-Object System.Windows.Forms.TextBox 
+    $newVMFSTextBox.Location = New-Object System.Drawing.Size(95,20)
+    $newVMFSTextBox.Size = New-Object System.Drawing.Size(305,20) 
+    $newVMFSTextBox.add_TextChanged({isVMFSTextChanged}) 
+    $newVMFSTextBox.Enabled = $false
+    $groupBoxVMFS.Controls.Add($newVMFSTextBox) 
+
+    $newVMFSSizeTextBox = New-Object System.Windows.Forms.TextBox 
+    $newVMFSSizeTextBox.Location = New-Object System.Drawing.Size(490,20)
+    $newVMFSSizeTextBox.Size = New-Object System.Drawing.Size(208,20) 
+    $newVMFSSizeTextBox.add_TextChanged({sizeChanged}) 
+    $newVMFSSizeTextBox.Enabled = $false
+    $groupBoxVMFS.Controls.Add($newVMFSSizeTextBox) 
+
+    ##################VM TextBox Definition
+
+    $newVMSnapshotTextBox = New-Object System.Windows.Forms.TextBox 
+    $newVMSnapshotTextBox.Location = New-Object System.Drawing.Size(130,70)
+    $newVMSnapshotTextBox.Size = New-Object System.Drawing.Size(290,20) 
+    $newVMSnapshotTextBox.add_TextChanged({isSnapshotTextChanged}) 
+    $newVMSnapshotTextBox.Enabled = $false
+    $groupBoxVMSnapshot.Controls.Add($newVMSnapshotTextBox) 
+
+        
+##################CheckBox Definition
+
+    $migrateVMCheckBox = new-object System.Windows.Forms.checkbox
+    $migrateVMCheckBox.Location = new-object System.Drawing.Size(15,19)
+    $migrateVMCheckBox.Size = new-object System.Drawing.Size(230,20)
+    $migrateVMCheckBox.Text = "Storage vMotion back to original VMFS"
+    $migrateVMCheckBox.Checked = $false
+    $migrateVMCheckBox.Enabled = $false
+    $groupBoxRestoreVM.Controls.Add($migrateVMCheckBox) 
+
+    $CheckBoxDeleteVMObject = new-object System.Windows.Forms.checkbox
+    $CheckBoxDeleteVMObject.Location = new-object System.Drawing.Size(8,20)
+    $CheckBoxDeleteVMObject.Size = new-object System.Drawing.Size(185,32)
+    $CheckBoxDeleteVMObject.Text = "I confirm I want to delete this virtual machine"
+    $CheckBoxDeleteVMObject.add_CheckedChanged({vmDeleteCheckedChanged})
+    $CheckBoxDeleteVMObject.Checked = $false
+    $CheckBoxDeleteVMObject.Enabled = $false
+    $groupBoxDeleteVMObject.Controls.Add($CheckBoxDeleteVMObject) 
+
+    $CheckBoxDeleteVMObjectSnapshot = new-object System.Windows.Forms.checkbox
+    $CheckBoxDeleteVMObjectSnapshot.Location = new-object System.Drawing.Size(8,20)
+    $CheckBoxDeleteVMObjectSnapshot.Size = new-object System.Drawing.Size(185,32)
+    $CheckBoxDeleteVMObjectSnapshot.Text = "I confirm I want to delete this snapshot"
+    $CheckBoxDeleteVMObjectSnapshot.add_CheckedChanged({vmDeleteSnapshotCheckedChanged})
+    $CheckBoxDeleteVMObjectSnapshot.Checked = $false
+    $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
+    $groupBoxDeleteVMSnapshot.Controls.Add($CheckBoxDeleteVMObjectSnapshot) 
+
+
+##################Connection DropDownBox Definition
+
+    $FlashArrayDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $FlashArrayDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $FlashArrayDropDownBox.Location = New-Object System.Drawing.Size(10,20) 
+    $FlashArrayDropDownBox.Size = New-Object System.Drawing.Size(300,20) 
+    $FlashArrayDropDownBox.DropDownHeight = 200
+    $FlashArrayDropDownBox.Enabled=$false
+    $groupBoxFA.Controls.Add($FlashArrayDropDownBox)
+    $FlashArrayDropDownBox.Items.Add("Add new FlashArray...")|out-null
+    $FlashArrayDropDownBox.SelectedIndex = 0
+    $FlashArrayDropDownBox.add_SelectedIndexChanged({FlashArrayChanged})
+
+    $ClusterDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $ClusterDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $ClusterDropDownBox.Location = New-Object System.Drawing.Size(100,50) 
+    $ClusterDropDownBox.Size = New-Object System.Drawing.Size(460,20) 
+    $ClusterDropDownBox.DropDownHeight = 200
+    $ClusterDropDownBox.Enabled=$false 
+    $ClusterDropDownBox.add_SelectedIndexChanged({clusterSelectionChanged})
+    $groupBoxRadio.Controls.Add($ClusterDropDownBox)
+
+##################VMFS DropDownBox Definition
+
+    $DatastoreDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $DatastoreDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $DatastoreDropDownBox.Location = New-Object System.Drawing.Size(90,21) 
+    $DatastoreDropDownBox.Size = New-Object System.Drawing.Size(235,20) 
+    $DatastoreDropDownBox.DropDownHeight = 200
+    $DatastoreDropDownBox.Enabled=$false 
+    $DatastoreDropDownBox.add_SelectedIndexChanged({datastoreSelectionChanged})
+    $groupBoxManageVMFS.Controls.Add($DatastoreDropDownBox)
+
+    $UnitDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $UnitDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $UnitDropDownBox.Location = New-Object System.Drawing.Size(705,20) 
+    $UnitDropDownBox.Size = New-Object System.Drawing.Size(40,20) 
+    $UnitDropDownBox.DropDownHeight = 200
+    $UnitDropDownBox.Enabled=$false 
+    $groupBoxVMFS.Controls.Add($UnitDropDownBox)
+    $UnitDropDownBox.Items.Add("MB") |Out-Null
+    $UnitDropDownBox.Items.Add("GB") |Out-Null
+    $UnitDropDownBox.Items.Add("TB") |Out-Null
+    $UnitDropDownBox.SelectedIndex = 3 |Out-Null
+
+    $CreateVMFSClusterDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $CreateVMFSClusterDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $CreateVMFSClusterDropDownBox.Location = New-Object System.Drawing.Size(490,60) 
+    $CreateVMFSClusterDropDownBox.Size = New-Object System.Drawing.Size(295,20) 
+    $CreateVMFSClusterDropDownBox.DropDownHeight = 200
+    $CreateVMFSClusterDropDownBox.Enabled=$false 
+    $CreateVMFSClusterDropDownBox.add_SelectedIndexChanged({enableCreateVMFS})
+    $groupBoxVMFS.Controls.Add($CreateVMFSClusterDropDownBox)
+
+    $ChooseFlashArrayDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $ChooseFlashArrayDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $ChooseFlashArrayDropDownBox.Location = New-Object System.Drawing.Size(95,60) 
+    $ChooseFlashArrayDropDownBox.Size = New-Object System.Drawing.Size(305,20) 
+    $ChooseFlashArrayDropDownBox.DropDownHeight = 200
+    $ChooseFlashArrayDropDownBox.Enabled=$false 
+    $ChooseFlashArrayDropDownBox.add_SelectedIndexChanged({enableCreateVMFS})
+    $groupBoxVMFS.Controls.Add($ChooseFlashArrayDropDownBox)
+
+    $RecoveryClusterDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $RecoveryClusterDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $RecoveryClusterDropDownBox.Location = New-Object System.Drawing.Size(95,37) 
+    $RecoveryClusterDropDownBox.Size = New-Object System.Drawing.Size(265,20) 
+    $RecoveryClusterDropDownBox.DropDownHeight = 200
+    $RecoveryClusterDropDownBox.Enabled=$false 
+    $RecoveryClusterDropDownBox.add_SelectedIndexChanged({enableRecovery})
+    $groupBoxVMFSClone.Controls.Add($RecoveryClusterDropDownBox)
+    
+    $SnapshotDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $SnapshotDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $SnapshotDropDownBox.add_SelectedIndexChanged({snapshotChanged})
+    $SnapshotDropDownBox.Location = New-Object System.Drawing.Size(490,21) 
+    $SnapshotDropDownBox.Size = New-Object System.Drawing.Size(370,20) 
+    $SnapshotDropDownBox.DropDownHeight = 200
+    $SnapshotDropDownBox.Enabled=$false
+    $groupBoxManageVMFS.Controls.Add($SnapshotDropDownBox)
+
+    ##################VM DropDownBox Definition
+
+    $VMDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $VMDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $VMDropDownBox.Location = New-Object System.Drawing.Size(70,55) 
+    $VMDropDownBox.Size = New-Object System.Drawing.Size(400,20) 
+    $VMDropDownBox.DropDownHeight = 200
+    $VMDropDownBox.Enabled=$false
+    $VMDropDownBox.add_SelectedIndexChanged({vmSelectionChanged}) 
+    $groupBoxVM.Controls.Add($VMDropDownBox)
+
+    $VMSnapshotDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $VMSnapshotDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $VMSnapshotDropDownBox.add_SelectedIndexChanged({vmSnapshotChanged})
+    $VMSnapshotDropDownBox.Location = New-Object System.Drawing.Size(70,25) 
+    $VMSnapshotDropDownBox.Size = New-Object System.Drawing.Size(400,20) 
+    $VMSnapshotDropDownBox.DropDownHeight = 200
+    $VMSnapshotDropDownBox.Enabled=$false
+    $groupBoxVMSnapshot.Controls.Add($VMSnapshotDropDownBox)
+
+    $VMDKDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $VMDKDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $VMDKDropDownBox.Location = New-Object System.Drawing.Size(15,20) 
+    $VMDKDropDownBox.Size = New-Object System.Drawing.Size(460,20) 
+    $VMDKDropDownBox.DropDownHeight = 200
+    $VMDKDropDownBox.Enabled=$false 
+    $VMDKDropDownBox.add_SelectedIndexChanged({vmDiskSelectionChanged})
+    $groupBoxVMDK.Controls.Add($VMDKDropDownBox)
+
+    $RDMDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $RDMDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $RDMDropDownBox.Location = New-Object System.Drawing.Size(15,20) 
+    $RDMDropDownBox.Size = New-Object System.Drawing.Size(460,20) 
+    $RDMDropDownBox.DropDownHeight = 200
+    $RDMDropDownBox.Enabled=$false 
+    $RDMDropDownBox.add_SelectedIndexChanged({vmDiskSelectionChanged})
+    $groupBoxRDM.Controls.Add($RDMDropDownBox)
+
+
+########################VM Recovery Drop Downs
+
+    $TargetVMDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $TargetVMDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $TargetVMDropDownBox.Size = New-Object System.Drawing.Size(280,20) 
+    $TargetVMDropDownBox.DropDownHeight = 200
+    $TargetVMDropDownBox.Enabled=$false
+    $TargetVMDropDownBox.add_SelectedIndexChanged({targetVMSelectionChanged})
+
+    $TargetDatastoreDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $TargetDatastoreDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox 
+    $TargetDatastoreDropDownBox.Size = New-Object System.Drawing.Size(280,20) 
+    $TargetDatastoreDropDownBox.DropDownHeight = 200
+    $TargetDatastoreDropDownBox.Enabled=$false
+    $TargetDatastoreDropDownBox.add_SelectedIndexChanged({targetDatastoreSelectionChanged})
+
+    $TargetClusterDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $TargetClusterDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $TargetClusterDropDownBox.Size = New-Object System.Drawing.Size(280,20) 
+    $TargetClusterDropDownBox.DropDownHeight = 200
+    $TargetClusterDropDownBox.Enabled=$false
+    $TargetClusterDropDownBox.add_SelectedIndexChanged({targetClusterSelectionChanged})
+
+##################Show Form
+
+    $main_form.Add_Shown({$main_form.Activate()})
+    [void] $main_form.ShowDialog()
+
+   

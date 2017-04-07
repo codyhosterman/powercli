@@ -89,6 +89,7 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
         write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
         write-host "Terminating Script" -BackgroundColor Red
         add-content $logfile ("PowerCLI not found. Please verify installation and retry.")
+        add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
         add-content $logfile "Terminating Script" 
         return
     }
