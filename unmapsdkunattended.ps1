@@ -14,6 +14,8 @@ if ($loginsightserver -and $loginsightagentID)
     $useloginsight = "y"
 }
 
+#To configure credentials, use the script here: 
+
 <#
 ***************************************************************************************************
 VMWARE POWERCLI AND PURE STORAGE POWERSHELL SDK MUST BE INSTALLED ON THE MACHINE THIS IS RUNNING ON
