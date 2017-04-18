@@ -1,4 +1,20 @@
-﻿<#
+﻿param( 
+[Parameter(Position=0,mandatory=$true)]
+[String[]] $flasharrays,
+[Parameter(Position=1,mandatory=$true)] 
+[String] $vcenter,
+[Parameter(Position=2,mandatory=$true)] 
+[String] $logfolder,
+[String] $loginsightserver,
+[String] $loginsightagentID
+)
+#Optional Log Insight information. Only needed if you want to send the results to a Log Insight instance
+if ($loginsightserver -and $loginsightagentID)
+{
+    $useloginsight = "y"
+}
+
+<#
 ***************************************************************************************************
 VMWARE POWERCLI AND PURE STORAGE POWERSHELL SDK MUST BE INSTALLED ON THE MACHINE THIS IS RUNNING ON
 ***************************************************************************************************
@@ -31,30 +47,12 @@ Supports:
 #>
 
 #Create log folder if non-existent
-write-host "Please choose a directory to store the script log"
-function ChooseFolder([string]$Message, [string]$InitialDirectory)
-{
-    $app = New-Object -ComObject Shell.Application
-    $folder = $app.BrowseForFolder(0, $Message, 0, $InitialDirectory)
-    $selectedDirectory = $folder.Self.Path 
-    return $selectedDirectory
-}
-$logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
-$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "unmapresults.txt"
-write-host "Script result log can be found at $logfile" -ForegroundColor Green
+$logfile = join-path -path $logfolder -childpath ((Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "unmapresults.txt")
 
 #Configure optional Log Insight target
-$useloginsight = read-host "Would you like to send the UNMAP results to a Log Insight instance (y/n)"
-while (($useloginsight -ine "y") -and ($useloginsight -ine "n"))
-{
-    write-host "Invalid entry, please enter y or n"
-    $useloginsight = read-host "Would you like to send the UNMAP results to a Log Insight instance (y/n)"
-}
 if ($useloginsight -ieq "y")
 {
-    $loginsightserver = read-host "Enter in the FQDN or IP of Log Insight"
-    $loginsightagentID = read-host "Enter a Log Insight Agent ID"
-    add-content $logfile ('Results will be sent to the following Log Insight instance ' + $loginsightserver + ' with the UUID of ' + $loginsightagentID)
+   add-content $logfile ('Results will be sent to the following Log Insight instance ' + $loginsightserver + ' with the UUID of ' + $loginsightagentID)
 }
 elseif ($useloginsight -ieq "n")
 {
@@ -73,75 +71,50 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
     }
     if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
     {
-        write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
-        write-host "Terminating Script" -BackgroundColor Red
         add-content $logfile ("PowerCLI not found. Please verify installation and retry.")
         add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
         add-content $logfile "Terminating Script" 
         return
     }
-        
 }
 #Set
 Set-PowerCLIConfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
 Set-PowerCLIConfiguration -Scope Session -WebOperationTimeoutSeconds -1 -confirm:$false |out-null
 
 if ( !(Get-Module -ListAvailable -Name PureStoragePowerShellSDK -ErrorAction SilentlyContinue) ) {
-    write-host ("FlashArray PowerShell SDK not found. Please verify installation and retry.") -BackgroundColor Red
-    write-host "Get it here: https://github.com/PureStorage-Connect/PowerShellSDK"
-    write-host "Terminating Script" -BackgroundColor Red
     add-content $logfile ("FlashArray PowerShell SDK not found. Please verify installation and retry.")
     add-content $logfile "Get it here: https://github.com/PureStorage-Connect/PowerShellSDK"
     add-content $logfile "Terminating Script" 
     return
 }
-write-host '             __________________________'
-write-host '            /++++++++++++++++++++++++++\'           
-write-host '           /++++++++++++++++++++++++++++\'           
-write-host '          /++++++++++++++++++++++++++++++\'         
-write-host '         /++++++++++++++++++++++++++++++++\'        
-write-host '        /++++++++++++++++++++++++++++++++++\'       
-write-host '       /++++++++++++/----------\++++++++++++\'     
-write-host '      /++++++++++++/            \++++++++++++\'    
-write-host '     /++++++++++++/              \++++++++++++\'   
-write-host '    /++++++++++++/                \++++++++++++\'  
-write-host '   /++++++++++++/                  \++++++++++++\' 
-write-host '   \++++++++++++\                  /++++++++++++/' 
-write-host '    \++++++++++++\                /++++++++++++/' 
-write-host '     \++++++++++++\              /++++++++++++/'  
-write-host '      \++++++++++++\            /++++++++++++/'    
-write-host '       \++++++++++++\          /++++++++++++/'     
-write-host '        \++++++++++++\'                   
-write-host '         \++++++++++++\'                           
-write-host '          \++++++++++++\'                          
-write-host '           \++++++++++++\'                         
-write-host '            \------------\'
-write-host 'Pure Storage FlashArray VMware ESXi UNMAP Script v5.0'
-write-host '----------------------------------------------------------------------------------------------------'
+add-content $logfile '             __________________________'
+add-content $logfile '            /++++++++++++++++++++++++++\'           
+add-content $logfile '           /++++++++++++++++++++++++++++\'           
+add-content $logfile '          /++++++++++++++++++++++++++++++\'         
+add-content $logfile '         /++++++++++++++++++++++++++++++++\'        
+add-content $logfile '        /++++++++++++++++++++++++++++++++++\'       
+add-content $logfile '       /++++++++++++/----------\++++++++++++\'     
+add-content $logfile '      /++++++++++++/            \++++++++++++\'    
+add-content $logfile '     /++++++++++++/              \++++++++++++\'   
+add-content $logfile '    /++++++++++++/                \++++++++++++\'  
+add-content $logfile '   /++++++++++++/                  \++++++++++++\' 
+add-content $logfile '   \++++++++++++\                  /++++++++++++/' 
+add-content $logfile '    \++++++++++++\                /++++++++++++/' 
+add-content $logfile '     \++++++++++++\              /++++++++++++/'  
+add-content $logfile '      \++++++++++++\            /++++++++++++/'    
+add-content $logfile '       \++++++++++++\          /++++++++++++/'     
+add-content $logfile '        \++++++++++++\'                   
+add-content $logfile '         \++++++++++++\'                           
+add-content $logfile '          \++++++++++++\'                          
+add-content $logfile '           \++++++++++++\'                         
+add-content $logfile '            \------------\'
+add-content $logfile 'Pure Storage FlashArray VMware ESXi UNMAP Script v5.0'
+add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-$FAcount = 0
-$inputOK = $false
-do
-{
-  try
-  {
-    [int]$FAcount = Read-Host "How many FlashArrays do you need to enter (enter a number)"
-    $inputOK = $true
-  }
-  catch
-  {
-    Write-Host -ForegroundColor red "INVALID INPUT!  Please enter a numeric value."
-  } 
-}
-until ($inputOK)
-$flasharrays = @()
-for ($i=0;$i -lt $FAcount;$i++)
-{
-    $flasharray = read-host "Please enter a FlashArray IP or FQDN"
-    $flasharrays += $flasharray
-}
-$Creds = $Host.ui.PromptForCredential("FlashArray Credentials", "Please enter your FlashArray username and password.", "","")
+$faCredPath = join-path -Path $logfolder -childpath "faUnmapCreds.xml"
+$Creds = Import-Clixml -Path $faCredPath
 #Connect to FlashArray via REST
+
 $purevolumes=@()
 $purevol=$null
 $EndPoint= @()
@@ -178,18 +151,9 @@ add-content $logfile '----------------------------------------------------------
 add-content $logfile 'Connected to the following FlashArray(s):'
 add-content $logfile $flasharrays
 add-content $logfile '----------------------------------------------------------------------------------------------------'
-write-host ""
-$vcenter = read-host "Please enter a vCenter IP or FQDN"
-$newcreds = Read-host "Re-use the FlashArray credentials for vCenter? (y/n)"
-while (($newcreds -ine "y") -and ($newcreds -ine "n"))
-{
-    write-host "Invalid entry, please enter y or n"
-    $newcreds = Read-host "Re-use the FlashArray credentials for vCenter? (y/n)"
-}
-if ($newcreds -ieq "n")
-{
-    $Creds = $Host.ui.PromptForCredential("vCenter Credentials", "Please enter your vCenter username and password.", "","")
-}
+
+$vcCredPath = join-path -Path $logfolder -childpath "vcUnmapCreds.xml"
+$Creds = Import-Clixml -Path $vcCredPath
 try
 {
     connect-viserver -Server $vcenter -Credential $Creds -ErrorAction Stop |out-null
@@ -199,17 +163,12 @@ try
 }
 catch
 {
-    write-host "Failed to connect to vCenter" -BackgroundColor Red
-    write-host $vcenter
-    write-host $Error[0]
-    write-host "Terminating Script" -BackgroundColor Red
     add-content $logfile "Failed to connect to vCenter"
     add-content $logfile $vcenter
     add-content $logfile $Error[0]
     add-content $logfile "Terminating Script"
     return
 }
-write-host ""
 
 #A function to make REST Calls to Log Insight
 function logInsightRestCall
@@ -277,7 +236,6 @@ add-content $logfile $datastores
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 #Starting UNMAP Process on datastores
-write-host "Please be patient--this process can take a long time"
 $purevol = $null
 foreach ($datastore in $datastores)
 {
@@ -385,7 +343,7 @@ foreach ($datastore in $datastores)
                     {
                         $reclaimeddatastores += $datastore
                         $esxchosen += $esx
-                        write-host ("Running UNMAP on VMFS named " + $datastore.Name + "...")
+                        add-content $logfile ("Running UNMAP on VMFS named " + $datastore.Name + "...")
                         $esxcli.storage.vmfs.unmap.invoke($unmapargs) |out-null
                     }
                     catch
@@ -416,11 +374,15 @@ foreach ($datastore in $datastores)
             }
     }
 }
+start-sleep 120
 $arrayspaceend = @()
 $arraychanges = @()
 $finaldatastores = @()
-$totalreclaimedvirtualspace = 0
-start-sleep 120
+$totalreclaimedvirtualspace = @()
+foreach ($fa in $endpoint)
+{
+    $totalreclaimedvirtualspace += 0
+}
 for ($i=0;$i -lt $reclaimeddatastores.count;$i++)
 {
     $lun = $reclaimeddatastores[$i].ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
@@ -438,7 +400,7 @@ for ($i=0;$i -lt $reclaimeddatastores.count;$i++)
     $newphysicalspace = '{0:N0}' -f ($volinfo.volumes/1024/1024/1024)
     $reclaimedvirtualspace = $virtualspace[$i] - $usedvolcap
     $reclaimedphysicalspace = $physicalspace[$i] - $newphysicalspace
-    $totalreclaimedvirtualspace += $reclaimedvirtualspace
+    $totalreclaimedvirtualspace[$arraychoice] += $reclaimedvirtualspace
     if ($reclaimedvirtualspace -like "-*")
     {
         $reclaimedvirtualspace = 0
@@ -470,13 +432,9 @@ for ($i=0;$i -lt $endpoint.count;$i++)
     $arraychanges += New-Object psobject -Property @{FlashArray=$($arrayspaceend[$i].hostname);VirtualSpaceGBReclaimed=$('{0:N0}' -f ($virtualspacedifference));PhysicalSpaceGBReclaimed=$('{0:N0}' -f ($physicalspacedifference))}
 }
 add-content $logfile "FlashArray-level Reclamation Statistics:"
-write-host "FlashArray-level Reclamation Statistics:"
-write-host ($arraychanges |ft -autosize -Property FlashArray,VirtualSpaceGBReclaimed,PhysicalSpaceGBReclaimed | Out-String )
 $arraychanges|ft -autosize -Property FlashArray,VirtualSpaceGBReclaimed,PhysicalSpaceGBReclaimed | Out-File -FilePath $logfile -Append -Encoding ASCII
 
 add-content $logfile "Volume-level Reclamation Statistics:"
-write-host "Volume-level Reclamation Statistics:"
-write-host ($finaldatastores |ft -autosize -Property Datastore,Volume,ExpectedMinimumVirtualSpaceGBReclaimed,ActualVirtualSpaceGBReclaimed,ActualPhysicalSpaceGBReclaimed | Out-String )
 $finaldatastores|ft -autosize -Property Datastore,Volume,ExpectedMinimumVirtualSpaceGBReclaimed,ActualVirtualSpaceGBReclaimed,ActualPhysicalSpaceGBReclaimed | Out-File -FilePath $logfile -Append -Encoding ASCII
 
 add-content $logfile ("Space reclaim operation for all FlashArray VMFS volumes is complete.")
