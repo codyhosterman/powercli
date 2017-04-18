@@ -14,7 +14,7 @@ if ($loginsightserver -and $loginsightagentID)
     $useloginsight = "y"
 }
 
-#To configure credentials, use the script here: 
+#To configure credential files, use the script here: https://github.com/codyhosterman/powercli/blob/master/unattendedUnmapConfigurator.ps1
 
 <#
 ***************************************************************************************************
