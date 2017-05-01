@@ -26,7 +26,8 @@ Supports:
 'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.5.0'
 #>
 #Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
-if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+#Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
+if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
     if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
     {
       . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
@@ -35,13 +36,36 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
     {
         . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
     }
-    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
+    elseif (!(get-Module -Name VMware.PowerCLI -ListAvailable))
+    {
+        if (get-Module -name PowerShellGet -ListAvailable)
+        {
+            try
+            {
+                Get-PackageProvider -name NuGet -ListAvailable -ErrorAction stop
+            }
+            catch
+            {
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -Confirm:$false
+            }
+            Install-Module -Name VMware.PowerCLI –Scope CurrentUser -Confirm:$false -Force
+        }
+        else
+        {
+            write-host ("PowerCLI could not automatically be installed because PowerShellGet is not present. Please install PowerShellGet or PowerCLI") -BackgroundColor Red
+            write-host "PowerShellGet can be found here https://www.microsoft.com/en-us/download/details.aspx?id=51451 or is included with PowerShell version 5"
+            write-host "Terminating Script" -BackgroundColor Red
+            return
+        }
+    }
+    if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable)))
     {
         write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
         write-host "Terminating Script" -BackgroundColor Red
         return
     }
 }
+
 #Set
 $EndPoint = $null
 $Endpoints = @()
