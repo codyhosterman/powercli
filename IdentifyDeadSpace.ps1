@@ -26,7 +26,7 @@ This can be run directly from PowerCLI or from a standard PowerShell prompt. Pow
 
 Supports:
 -PowerShell 3.0 or later
--Pure Storage PowerShell SDK 1.5 or later
+-Pure Storage PowerShell SDK 1.7 or later
 -PowerCLI 6.3 Release 1 and later
 -Purity 4.1 and later
 -FlashArray 400 Series and //m
@@ -43,7 +43,9 @@ function ChooseFolder([string]$Message, [string]$InitialDirectory)
 $logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
 $logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "deadspace.txt"
 write-host "Script result log can be found at $logfile" -ForegroundColor Green
-if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
+#Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
+if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
     if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
     {
       . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
@@ -52,15 +54,34 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
     {
         . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
     }
-    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
+    elseif (!(get-Module -Name VMware.PowerCLI -ListAvailable))
+    {
+        if (get-Module -name PowerShellGet -ListAvailable)
+        {
+            try
+            {
+                Get-PackageProvider -name NuGet -ListAvailable -ErrorAction stop
+            }
+            catch
+            {
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -Confirm:$false
+            }
+            Install-Module -Name VMware.PowerCLI –Scope CurrentUser -Confirm:$false -Force
+        }
+        else
+        {
+            write-host ("PowerCLI could not automatically be installed because PowerShellGet is not present. Please install PowerShellGet or PowerCLI") -BackgroundColor Red
+            write-host "PowerShellGet can be found here https://www.microsoft.com/en-us/download/details.aspx?id=51451 or is included with PowerShell version 5"
+            write-host "Terminating Script" -BackgroundColor Red
+            return
+        }
+    }
+    if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable)))
     {
         write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
         write-host "Terminating Script" -BackgroundColor Red
-        add-content $logfile ("PowerCLI not found. Please verify installation and retry.")
-        add-content $logfile "Terminating Script" 
         return
     }
-        
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
 if ( !(Get-Module -ListAvailable -Name PureStoragePowerShellSDK -ErrorAction SilentlyContinue) ) {
@@ -93,7 +114,7 @@ write-host '         \++++++++++++\'
 write-host '          \++++++++++++\'                          
 write-host '           \++++++++++++\'                         
 write-host '            \------------\'
-write-host 'Pure Storage VMware ESXi Dead Space Detection Script v1.0'
+write-host 'Pure Storage VMware ESXi Dead Space Detection Script v1.1'
 write-host '----------------------------------------------------------------------------------------------------'
 
 $FAcount = 0
@@ -268,11 +289,20 @@ foreach ($datastore in $datastores)
                     add-content $logfile ('The volume is on the FlashArray ' + $endpoint[$arraychoice].endpoint)
                     add-content $logfile ('This datastore is a Pure Storage volume named ' + $purevol.name)
                     add-content $logfile ''
-                    $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
-                    $usedvolcap = ((1 - $volinfo.thin_provisioning)*$volinfo.size)/1024/1024/1024
-                    $usedspace = $datastore.CapacityGB - $datastore.FreeSpaceGB
-                    $deadspace = '{0:N0}' -f ($usedvolcap - $usedspace)
-                    $deadspace = [convert]::ToInt32($deadspace, 10)
+                    try 
+                    {
+                        $volinfo = Get-PfaVolumeSpaceMetrics -Array $EndPoint[$arraychoice] -VolumeName $purevol.name
+                        $usedvolcap = ((1 - $volinfo.thin_provisioning)*$volinfo.size)/1024/1024/1024
+                        $usedspace = $datastore.CapacityGB - $datastore.FreeSpaceGB
+                        $deadspace = '{0:N0}' -f ($usedvolcap - $usedspace)
+                        $deadspace = $deadspace -replace ',',''
+                        $deadspace = [convert]::ToInt32($deadspace, 10)
+                    }
+                    catch
+                    {
+                        add-content $logfile $error[0]
+                        return
+                    }
                     if ($deadspace -ge $unmapthreshold)
                     {
                         add-content $logfile ('This volume has ' + $deadspace + ' GB of dead space.')
@@ -305,10 +335,10 @@ foreach ($datastore in $datastores)
     }
 }
 add-content $logfile ""
-add-content $logfile ("Analysis for all volumes is complete. Total possible virtual space that can be reclaimed is " + $totaldeadspace + " GB:")
+add-content $logfile ("Analysis for all volumes is complete. Minimum total possible virtual space that can be reclaimed is " + $totaldeadspace + " GB:")
 if ($datastorestounmap.count -gt 0)
 {
-    write-host ("Analysis for all volumes is complete. Total possible virtual space that can be reclaimed is " + $totaldeadspace + " GB:")
+    write-host ("Analysis for all volumes is complete. Minimum total possible virtual space that can be reclaimed is " + $totaldeadspace + " GB:")
     write-host ("The following datastores have more than " + $unmapthreshold + " GB of virtual dead space and are recommended for UNMAP")
     write-host ($datastorestounmap |ft -autosize -Property DatastoreName,DeadSpaceGB | Out-String )
     $datastorestounmap|ft -autosize -Property DatastoreName,DeadSpaceGB | Out-File -FilePath $logfile -Append -Encoding ASCII
