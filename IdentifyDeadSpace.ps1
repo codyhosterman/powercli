@@ -5,9 +5,6 @@
 #For info, refer to www.codyhosterman.com
 #
 #*****************************************************************
-#Enter the following parameters. Put all entries inside the quotes.
-#One or more FlashArrays are supported. Remove/add additional ,''s for more/less arrays.
-#Remove '<array IP or FQDN>' and replace that entire string with a FlashArray IP or FQDN like '192.168.0.10'. Separate each array by a comma.
 #Threshold is in GB. This will return only datastores with that number of GB of virtual dead space or more
 #*****************************************************************
 
@@ -21,6 +18,8 @@ will not be liable for any damage or loss to the system.
 ************************************************************************
 
 This script will identify VMware VMFS volumes on Pure Storage FlashArray volumes that have a certain amount of virtual dead space and return those datastores.
+
+Version 1.2
 
 This can be run directly from PowerCLI or from a standard PowerShell prompt. PowerCLI and the FlashArray PowerShell SDK must be installed on the local host regardless.
 
@@ -296,6 +295,7 @@ foreach ($datastore in $datastores)
                         $usedspace = $datastore.CapacityGB - $datastore.FreeSpaceGB
                         $deadspace = '{0:N0}' -f ($usedvolcap - $usedspace)
                         $deadspace = $deadspace -replace ',',''
+                        $deadspace = [System.Math]::Floor($deadspace)
                         $deadspace = [convert]::ToInt32($deadspace, 10)
                     }
                     catch
