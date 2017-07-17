@@ -23,10 +23,11 @@ Supports:
 -FlashArray 400 Series and //m
 -vCenter 5.5 and later
 
-'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.5.0'
+'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.7.0'
 #>
 #Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
 #Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
+
 if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
     if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
     {
@@ -65,7 +66,8 @@ if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
         return
     }
 }
-
+set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
+Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false  -confirm:$false|out-null
 #Set
 $EndPoint = $null
 $Endpoints = @()
@@ -257,24 +259,44 @@ function getClusters{
     try 
     {
         $clusters = Get-Cluster #Returns all clusters
-        $ClusterDropDownBox.Items.Clear()
-        $HostClusterDropDownBox.Items.Clear()
-        $ClusterDropDownBox.Items.Add("<All Clusters>")
-        $HostClusterDropDownBox.Items.Add("Choose a Cluster...")
-        foreach ($cluster in $clusters) 
+        if ($TabControl.SelectedIndex -eq 3)
         {
-            $ClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
-            $HostClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
-        } 
-        $ClusterDropDownBox.Enabled = $true
-        $HostClusterDropDownBox.Enabled = $true
+            $PgroupClusterDropDownBox.Items.Clear()
+            $PgroupClusterDropDownBox.Items.Add("Choose a Recovery Cluster...")
+            foreach ($cluster in $clusters) 
+            {
+                $PgroupClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+            } 
+            $PgroupClusterDropDownBox.Enabled = $true
+            $PgroupClusterDropDownBox.SelectedIndex = 0
+        }
+        elseif ($TabControl.SelectedIndex -eq 2)
+        {
+            $HostClusterDropDownBox.Items.Clear()
+            $HostClusterDropDownBox.Items.Add("Choose a Cluster...")
+            foreach ($cluster in $clusters) 
+            {
+                $HostClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+            } 
+            $HostClusterDropDownBox.Enabled = $true
+            $HostClusterDropDownBox.SelectedIndex = 0
+        }
+        elseif (($TabControl.SelectedIndex -eq 0) -or ($TabControl.SelectedIndex -eq 1))
+        {
+            $ClusterDropDownBox.Items.Clear()
+            $ClusterDropDownBox.Items.Add("<All Clusters>")
+            foreach ($cluster in $clusters) 
+            {
+                $ClusterDropDownBox.Items.Add($cluster.Name) #Add Clusters to DropDown List
+            } 
+            $ClusterDropDownBox.Enabled = $true
+            $ClusterDropDownBox.SelectedIndex = 0
+        }
     }
     catch 
     {
         $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
     }
-        $ClusterDropDownBox.SelectedIndex = 0
-        $HostClusterDropDownBox.SelectedIndex = 0
 }
 function getRecoveryClusters{
   
@@ -401,6 +423,7 @@ function getVMSnapshots{
         else
         {
             $datastore = get-vm -Name $VMDropDownBox.SelectedItem.ToString() |Get-Datastore  -ErrorAction stop
+            
             $script:lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
             if ($datastore.count -gt 1)
             {
@@ -504,6 +527,11 @@ function getHostGroup{
             {
                 $recoveryobject = get-cluster -Name $RecoveryClusterDropDownBox.SelectedItem.ToString()
             }
+        }
+        if ($TabControl.SelectedIndex -eq 3)
+        {
+            $script:endpoint = $endpoints[$PgroupFADropDownBox.SelectedIndex-1]
+            $recoveryobject = get-cluster -Name $PgroupClusterDropDownBox.SelectedItem.ToString()
         }
         else
         {
@@ -610,6 +638,8 @@ function getVMs{
             $VMDropDownBox.Items.Add("No VMs found")
             $VMDropDownBox.SelectedIndex = 0
             $VMDropDownBox.Enabled=$false
+            $VMSnapshotDropDownBox.Items.Clear()
+            $VMSnapshotDropDownBox.Enabled = $false
         }
         else
         {
@@ -662,6 +692,8 @@ function getDisks{
                 {
                     $VMDKDropDownBox.Items.Add("No virtual disks found")
                     $VMDKDropDownBox.SelectedIndex = 0
+                    $VMSnapshotDropDownBox.Items.Clear()
+                    $VMSnapshotDropDownBox.Enabled = $false
                 }
             }
             elseif ($script:RadioButtonRDM.Checked -eq $true)
@@ -696,6 +728,8 @@ function getDisks{
                     $RDMDropDownBox.Items.Add("No raw device mappings found")
                     $RDMDropDownBox.SelectedIndex = 0
                     $RDMDropDownBox.Enabled = $false
+                    $VMSnapshotDropDownBox.Items.Clear()
+                    $VMSnapshotDropDownBox.Enabled = $false
                 }
             }
         }
@@ -737,7 +771,7 @@ function getFlashArray{
 function listFlashArrays{
     try
     {
-        if ($TabControl.SelectedIndex -ne 2)
+        if (($TabControl.SelectedIndex -eq 0) -or ($TabControl.SelectedIndex -eq 1))
         {
             $ChooseFlashArrayDropDownBox.Items.Clear()
             $ChooseFlashArrayDropDownBox.Items.Add("Choose a FlashArray...")
@@ -759,6 +793,27 @@ function listFlashArrays{
                 $HostFlashArrayDropDownBox.Enabled = $true
             }
             $HostFlashArrayDropDownBox.SelectedIndex = 0
+        }
+        elseif ($TabControl.SelectedIndex -eq 3)
+        {
+            $PgroupFADropDownBox.Enabled = $false
+            $PgroupFADropDownBox.Items.Clear()
+            $PgroupFADropDownBox.Items.Add("Choose a FlashArray...")
+            foreach ($fa in $endpoints)
+            {
+                $PgroupFADropDownBox.Items.Add($fa.endpoint)
+                $PgroupFADropDownBox.Enabled = $true
+            }
+            if ($endpoints.count -eq 1)
+            {
+                $PgroupFADropDownBox.SelectedIndex = 1
+            }
+            else
+            {
+                $PgroupFADropDownBox.SelectedIndex = 0
+                $AddToPgroupCheckedListBox.Items.Clear()
+                $AddToPgroupCheckedListBox.Enabled=$false
+            }
         }
     }
     catch
@@ -830,6 +885,197 @@ function getTargetDatastores{
     }
     $TargetDatastoreDropDownBox.Enabled = $true
     $TargetDatastoreDropDownBox.SelectedIndex = 0
+}
+function getProtectionGroups{
+    try
+    {
+        $script:pgroups = Get-PfaProtectionGroups -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] 
+        if ($TabControl.SelectedIndex -eq 3)
+        {
+            $PgroupPGDropDownBox.Enabled = $false
+            $PgroupPGDropDownBox.Items.Clear()
+            if ($pgroups -ne $null)
+            {
+                $PgroupPGDropDownBox.Items.Add("Choose a Protection Group...")
+                foreach ($pg in $script:pgroups)
+                {
+                    $PgroupPGDropDownBox.Items.Add($pg.name)
+                    $PgroupPGDropDownBox.Enabled = $true
+                }
+            }
+            else
+            {
+                $PgroupPGDropDownBox.Items.Add("No Protection Groups found")
+            }
+            $PgroupPGDropDownBox.SelectedIndex = 0
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getProtectionGroupSnapshots{
+    try
+    {
+        if ($TabControl.SelectedIndex -eq 3)
+        {
+            $selectedPG = $PgroupPGDropDownBox.SelectedItem.ToString()
+            if ($selectedPG -ne "Choose a Protection Group...")
+            {
+                if ($PgroupPGDropDownBox.SelectedItem.ToString() -like "*:*")
+                {
+                    if ($script:currentPGisRemote -eq $true)
+                    {
+                        $script:pgFaChanged = $false
+                    }
+                    else
+                    {
+                        $script:pgFaChanged = $true
+                    }
+                    $script:currentPGisRemote = $true
+                }
+                else
+                {
+                    if ($script:currentPGisRemote -eq $true)
+                    {
+                        $script:pgFaChanged = $true
+                    }
+                    else
+                    {
+                        $script:pgFaChanged = $false
+                    }
+                    $script:currentPGisRemote = $false
+                }
+                $script:pgroupsnapshots = Get-PfaProtectionGroupSnapshots -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Name $selectedPG
+                $buttonCreatePgroupSnap.Enabled = $true
+                $PgroupSnapDropDownBox.Enabled = $false
+                $PgroupSnapDropDownBox.Items.Clear()
+                if ($script:pgroupsnapshots -ne $null)
+                {
+                    $PgroupSnapDropDownBox.Items.Add("Choose a Snapshot Group...")
+                    foreach ($pgsnapgroup in $script:pgroupsnapshots)
+                    {
+                        $dateconvert = get-date $pgsnapgroup.created
+                        $PgroupSnapDropDownBox.Items.Add("$($dateconvert)       $($pgsnapgroup.name)")
+                        $PgroupSnapDropDownBox.Enabled = $true
+                    }
+                }
+                else
+                {
+                    $PgroupSnapDropDownBox.Items.Add("No Snapshot Groups found")
+                }
+                $PgroupSnapDropDownBox.SelectedIndex = 0
+                getPgroupDatastores
+                $script:atChoosePgroup = $false
+            }
+            else
+            {
+                $script:atChoosePgroup = $true
+                $PgroupSnapDropDownBox.Enabled = $false
+                $PgroupSnapDropDownBox.Items.Clear()
+                $SnapshotCheckedListBox.Items.Clear()
+                $SnapshotCheckedListBox.Enabled=$false
+                $PgroupSnapDropDownBox.Enabled = $false
+                $PgroupSnapDropDownBox.Items.Clear()
+                $PgroupClusterDropDownBox.Items.Clear()
+                $buttonRecoverPgroup.Enabled = $false
+                $PgroupClusterDropDownBox.Enabled=$false
+                $SnapshotCheckedListBox.Items.Clear()
+                $SnapshotCheckedListBox.Enabled=$false
+                $registerVMs.Enabled = $false
+                $registerVMs.Checked = $false
+                $buttonCreatePgroupSnap.Enabled = $false
+                $buttonDeletePgroupSnap.Enabled = $false
+                $AddToPgroupCheckedListBox.Items.Clear()
+                $AddToPgroupCheckedListBox.Enabled=$false
+            }
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getPiTSnapshots{
+    try
+    {
+        if (($PgroupSnapDropDownBox.SelectedItem.ToString() -ne "Choose a Snapshot Group...") -and ($PgroupSnapDropDownBox.SelectedItem.ToString() -ne "No Snapshot Groups found"))
+        {
+            
+            $selectedPiT = $script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name
+            $script:volumeSnapshots = Get-PfaVolumeSnapshots -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -VolumeName * |where-object {$_.name -like "$($selectedPiT).*"}
+            $SnapshotCheckedListBox.Items.Clear()
+            $SnapshotCheckedListBox.Enabled=$false
+            $buttonDeletePgroupSnap.Enabled = $true
+            $SnapshotCheckedListBox.Items.Add("Select All")
+            foreach ($volumeSnapshot in $script:volumeSnapshots)
+            {
+                $SnapshotCheckedListBox.Items.Add($volumeSnapshot.name)
+            } 
+            $SnapshotCheckedListBox.Enabled = $true
+            $SnapshotCheckedListBox.SetItemchecked(0,$true)
+            for ($i=1;$i -lt $SnapshotCheckedListBox.Items.count;$i++) 
+            {
+                $SnapshotCheckedListBox.SetItemchecked($i,$true)
+            }
+            getClusters
+        }
+        else
+        {
+            $SnapshotCheckedListBox.Items.Clear()
+            $SnapshotCheckedListBox.Enabled=$false
+            $PgroupClusterDropDownBox.Items.Clear()
+            $PgroupClusterDropDownBox.Enabled=$false
+            $SnapshotCheckedListBox.Items.Clear()
+            $SnapshotCheckedListBox.Enabled=$false
+            $registerVMs.Enabled = $false
+            $registerVMs.Checked = $false
+            $buttonRecoverPgroup.Enabled = $false
+            $buttonDeletePgroupSnap.Enabled = $false
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getPgroupDatastores{
+    try
+    {
+        if ($PgroupPGDropDownBox.SelectedItem.ToString() -like "*:*")
+        {
+            $AddToPgroupCheckedListBox.Items.Clear()
+            $AddToPgroupCheckedListBox.Enabled=$false
+        }
+        elseif (($script:pgFaChanged -eq $true) -or ($script:atChoosePgroup -eq $true))
+        {
+            $arraySN = Get-PfaArrayAttributes -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1]
+            $arraySN = $arraySN.id.substring(0,18)
+            $arraySN = $arraySN -replace '-',''
+            $script:datastoresOnFA = get-datastore | where-object {($_.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique) -like "*$($arraySN)*"}
+            $AddToPgroupCheckedListBox.Items.Clear()
+            $AddToPgroupCheckedListBox.Enabled=$false
+            $AddToPgroupCheckedListBox.Items.Add("Select All")
+            if ($datastoresOnFA -ne $null)
+            {
+                foreach ($datastoreOnFA in $datastoresOnFA)
+                {
+                    $AddToPgroupCheckedListBox.Items.Add($datastoreOnFA.name)    
+                }
+                $AddToPgroupCheckedListBox.Enabled = $true
+            }
+            else
+            {
+                $AddToPgroupCheckedListBox.Items.Add("No datastores found from this FA.")
+            }
+            $script:pgFaChanged = $false
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
 }
 #Context change functions
 function radioSelectChanged{
@@ -918,7 +1164,7 @@ function radioSelectChanged{
     }
     if ($script:RadioButtonVM.Checked -eq $true)
     {
-        if ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...")
+        if (($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...") -and ($VMDropDownBox.SelectedItem.ToString() -ne "No VMs found"))
         {
             getVMSnapshots
         }
@@ -1057,16 +1303,16 @@ function datastoreSelectionChanged{
         $SnapshotDropDownBox.Enabled = $false
     }
 }
-function clusterSelectionChanged{
-    
-}
 function vmSelectionChanged{
     if (($VMDropDownBox.Enabled -eq $true) -and ($VMDropDownBox.SelectedItem.ToString() -ne "<No Virtual Machines Found>") -and ($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM..."))
     {
         $CheckBoxDeleteVMObject.Enabled = $false
         if ($script:RadioButtonVM.Checked -eq $true)
         {
-            $CheckBoxDeleteVMObject.Enabled = $true
+            if (($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...") -and ($VMDropDownBox.SelectedItem.ToString() -ne "No VMs found"))
+            {
+                $CheckBoxDeleteVMObject.Enabled = $true
+            }
         }
         $CheckBoxDeleteVMObject.Checked = $false
         $CheckBoxDeleteVMObjectSnapshot.Checked = $false
@@ -1074,7 +1320,10 @@ function vmSelectionChanged{
         getDisks
         if ($script:RadioButtonVM.Checked -eq $true)
         {
-            getVMSnapshots
+            if (($VMDropDownBox.SelectedItem.ToString() -ne "Choose VM...") -and ($VMDropDownBox.SelectedItem.ToString() -ne "No VMs found"))
+            {
+                getVMSnapshots
+            }
         }
     }
     else
@@ -1347,25 +1596,163 @@ function targetDatastoreSelectionChanged{
     }
 }
 function clusterConfigSelectionChanged{
-    if (($HostClusterDropDownBox.SelectedItem.ToString() -ne "Choose a Cluster...") -and ($HostFlashArrayDropDownBox.SelectedItem.ToString() -ne "Choose a FlashArray..."))
+    try
     {
-        $script:RadioButtoniSCSI.Enabled = $true
-        $script:RadioButtoniSCSI.Checked = $true
-        $script:RadioButtonFC.Enabled = $true
-        $buttonCreateHostGroup.Enabled = $true
-        $buttonConfigureiSCSI.Enabled = $true
-        $buttonConfigureSATP.Enabled = $true
+        if (($HostClusterDropDownBox.SelectedItem.ToString() -ne "Choose a Cluster...") -and ($HostFlashArrayDropDownBox.SelectedItem.ToString() -ne "Choose a FlashArray..."))
+        {
+            $script:RadioButtoniSCSI.Enabled = $true
+            $script:RadioButtoniSCSI.Checked = $true
+            $script:RadioButtonFC.Enabled = $true
+            $buttonCreateHostGroup.Enabled = $true
+            $buttonConfigureiSCSI.Enabled = $true
+            $buttonConfigureSATP.Enabled = $true
+        }
+        else
+        {
+            $script:RadioButtoniSCSI.Enabled = $false
+            $script:RadioButtoniSCSI.Checked = $false
+            $script:RadioButtonFC.Checked = $false
+            $script:RadioButtonFC.Enabled = $false
+            $buttonCreateHostGroup.Enabled = $false
+            $buttonConfigureiSCSI.Enabled = $false
+            $buttonConfigureSATP.Enabled = $false
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + "  $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function pgroupFAChanged{
+    if ($PgroupFADropDownBox.SelectedItem.ToString() -ne "Choose a FlashArray...")
+    {
+        getProtectionGroups
+        $script:pgFaChanged = $true
     }
     else
     {
-        $script:RadioButtoniSCSI.Enabled = $false
-        $script:RadioButtoniSCSI.Checked = $false
-        $script:RadioButtonFC.Checked = $false
-        $script:RadioButtonFC.Enabled = $false
-        $buttonCreateHostGroup.Enabled = $false
-        $buttonConfigureiSCSI.Enabled = $false
-        $buttonConfigureSATP.Enabled = $false
+        $PgroupPGDropDownBox.Enabled = $false
+        $PgroupPGDropDownBox.Items.Clear()
+        $PgroupSnapDropDownBox.Enabled = $false
+        $PgroupSnapDropDownBox.Items.Clear()
+        $PgroupClusterDropDownBox.Items.Clear()
+        $PgroupClusterDropDownBox.Enabled=$false
+        $SnapshotCheckedListBox.Items.Clear()
+        $SnapshotCheckedListBox.Enabled=$false
+        $registerVMs.Enabled = $false
+        $buttonRecoverPgroup.Enabled = $false
+        $registerVMs.Checked = $false
+        $buttonCreatePgroupSnap.Enabled = $false
+        $buttonDeletePgroupSnap.Enabled = $false
+        $AddToPgroupCheckedListBox.Items.Clear()
+        $AddToPgroupCheckedListBox.Enabled=$false
     }
+}
+function snapshotSelectAll{
+    if ($This.SelectedItem -eq 'Select All') 
+    {
+        If ($This.GetItemCheckState(0) -ne 'Checked')
+        {
+            for ($i=1;$i -lt $SnapshotCheckedListBox.Items.count;$i++) 
+            {
+                $SnapshotCheckedListBox.SetItemchecked($i,$true)
+            }
+            if ($PgroupClusterDropDownBox.Enabled -eq $false)
+            {
+                getClusters
+            }
+        }
+        else
+        {
+            for ($i=1;$i -lt $SnapshotCheckedListBox.Items.count;$i++) 
+            {
+                $SnapshotCheckedListBox.SetItemchecked($i,$false)
+            }
+            $PgroupClusterDropDownBox.Items.Clear()
+            $PgroupClusterDropDownBox.Enabled=$false
+            $registerVMs.Enabled = $false
+            $buttonRecoverPgroup.Enabled = $false
+            $registerVMs.Checked = $false
+        }
+    }
+    else
+    {
+        if ($This.GetItemCheckState($This.SelectedIndex) -ne 'Checked')
+        {
+            if ($PgroupClusterDropDownBox.Enabled -eq $false)
+            {
+                getClusters
+            }
+        }
+        elseif($SnapshotCheckedListBox.CheckedItems.count -eq 1)
+        {
+            $PgroupClusterDropDownBox.Items.Clear()
+            $PgroupClusterDropDownBox.Enabled=$false
+            $registerVMs.Enabled = $false
+            $buttonRecoverPgroup.Enabled = $false
+            $registerVMs.Checked = $false
+        }
+        elseif ($This.GetItemCheckState($This.SelectedIndex) -eq 'Checked')
+        {
+            if ($SnapshotCheckedListBox.GetItemCheckState(0) -eq 'Checked')
+            {
+                $SnapshotCheckedListBox.SetItemchecked(0,$false)
+            }
+        }
+    }
+}
+function enableAddtoPG{
+    if ($This.SelectedItem -eq 'Select All') 
+    {
+        If ($This.GetItemCheckState(0) -ne 'Checked')
+        {
+            for ($i=1;$i -lt $AddToPgroupCheckedListBox.Items.count;$i++) 
+            {
+                $AddToPgroupCheckedListBox.SetItemchecked($i,$true)
+            }
+            $buttonAddVMFStoPgroup.Enabled = $true
+        }
+        else
+        {
+            for ($i=1;$i -lt $AddToPgroupCheckedListBox.Items.count;$i++) 
+            {
+                $AddToPgroupCheckedListBox.SetItemchecked($i,$false)
+            }
+            $buttonAddVMFStoPgroup.Enabled = $false
+        }
+    }
+    else
+    {
+        if ($This.GetItemCheckState($This.SelectedIndex) -ne 'Checked')
+        {
+            $buttonAddVMFStoPgroup.Enabled = $true
+        }
+        elseif($AddToPgroupCheckedListBox.CheckedItems.count -eq 1)
+        {
+            $buttonAddVMFStoPgroup.Enabled = $false
+        }
+        elseif ($This.GetItemCheckState($This.SelectedIndex) -eq 'Checked')
+        {
+            if ($AddToPgroupCheckedListBox.GetItemCheckState(0) -eq 'Checked')
+            {
+                $AddToPgroupCheckedListBox.SetItemchecked(0,$false)
+            }
+        }
+    }
+}
+function clusterSelectionChanged{
+   enableObjects 
+}
+function registerVMchanged{
+    if ($registerVMs.Checked -eq $false)
+    {
+        $powerOnVMs.Enabled = $false
+        $powerOnVMs.Checked = $false
+    }
+    else
+    {
+        $powerOnVMs.Enabled = $true
+    }   
 }
 #Enable functions
 function enableCreateVMFS{
@@ -1424,6 +1811,11 @@ function enableObjects{
             $script:main_form.Controls.Remove($groupBoxChooseHost)
             $script:main_form.Controls.Add($groupBoxRadio)
         }
+        elseif ($script:lastTab -ieq "pgroup")
+        {
+            $script:main_form.Controls.Remove($groupBoxFilterPgroup)
+            $script:main_form.Controls.Add($groupBoxRadio)
+        }
         $script:lastTab = "vmfs"
         $ChooseFlashArrayDropDownBox.Enabled=$true 
         $CreateVMFSClusterDropDownBox.Enabled=$true
@@ -1446,6 +1838,11 @@ function enableObjects{
             $script:main_form.Controls.Remove($groupBoxChooseHost)
             $script:main_form.Controls.Add($groupBoxRadio)
         }
+        elseif ($script:lastTab -ieq "pgroup")
+        {
+            $script:main_form.Controls.Remove($groupBoxFilterPgroup)
+            $script:main_form.Controls.Add($groupBoxRadio)
+        }
         $script:lastTab = "vm"
         $VMDropDownBox.Enabled = $true
         $buttonVMs.Enabled = $true
@@ -1459,10 +1856,33 @@ function enableObjects{
     }
     elseif($TabControl.SelectedIndex -eq 2)
     {
+        if (($script:lastTab -ieq "vm") -or ($script:lastTab -ieq "vmfs"))
+        {
+            $script:main_form.Controls.Remove($groupBoxRadio)
+            $script:main_form.Controls.Add($groupBoxChooseHost) 
+        }
+        elseif ($script:lastTab -ieq "pgroup")
+        {
+            $script:main_form.Controls.Remove($groupBoxFilterPgroup)
+            $script:main_form.Controls.Add($groupBoxChooseHost)
+        } 
         $script:lastTab = "host"
-        $script:main_form.Controls.Remove($groupBoxRadio)
-        $script:main_form.Controls.Add($groupBoxChooseHost)  
-        getClusters
+        getclusters
+        listFlashArrays
+    }
+    elseif($TabControl.SelectedIndex -eq 3)
+    {
+        if ($script:lastTab -ieq "host")
+        {
+            $script:main_form.Controls.Remove($groupBoxChooseHost)
+            $script:main_form.Controls.Add($groupBoxFilterPgroup)
+        }
+        elseif (($script:lastTab -ieq "vm") -or ($script:lastTab -ieq "vmfs"))
+        {
+            $script:main_form.Controls.Remove($groupBoxRadio)
+            $script:main_form.Controls.Add($groupBoxFilterPgroup)
+        }
+        $script:lastTab = "pgroup"
         listFlashArrays
     }
 }
@@ -1498,6 +1918,35 @@ function disableObjects{
         $RadioButtonVMDK.Enabled = $false
         $RadioButtonRDM.Enabled = $false
     }
+    elseif($TabControl.SelectedIndex -eq 2)
+    {
+        $HostFlashArrayDropDownBox.Enabled = $false
+        $HostFlashArrayDropDownBox.Items.Clear()
+        $HostClusterDropDownBox.Items.Clear()
+        $HostClusterDropDownBox.Enabled = $false
+    }
+    elseif($TabControl.SelectedIndex -eq 3)
+    {
+        $PgroupPGDropDownBox.Enabled = $false
+        $PgroupPGDropDownBox.Items.Clear()
+        $PgroupSnapDropDownBox.Enabled = $false
+        $PgroupSnapDropDownBox.Items.Clear()
+        $SnapshotCheckedListBox.Items.Clear()
+        $SnapshotCheckedListBox.Enabled=$false
+        $buttonRecoverPgroup.Enabled = $false
+        $PgroupSnapDropDownBox.Enabled = $false
+        $PgroupSnapDropDownBox.Items.Clear()
+        $PgroupClusterDropDownBox.Items.Clear()
+        $PgroupClusterDropDownBox.Enabled=$false
+        $SnapshotCheckedListBox.Items.Clear()
+        $SnapshotCheckedListBox.Enabled=$false
+        $registerVMs.Enabled = $false
+        $buttonCreatePgroupSnap.Enabled = $false
+        $registerVMs.Checked = $false
+        $buttonDeletePgroupSnap.Enabled = $false
+        $AddToPgroupCheckedListBox.Items.Clear()
+        $AddToPgroupCheckedListBox.Enabled=$false
+    }
  
 }
 function disableRecoveryItems{
@@ -1511,6 +1960,21 @@ function disableRecoveryItems{
     $script:buttonRestoreVM.Enabled = $false
     $script:buttonRestoreRDM.Enabled = $false
     $migrateVMCheckBox.Enabled = $false
+}
+function pgroupcheckboxes{
+    if (($PgroupClusterDropDownBox.SelectedItem.ToString() -ne "Choose a Recovery Cluster...") -and ($SnapshotCheckedListBox.CheckedItems.count -ge 1))
+    {
+        $registerVMs.Enabled = $true
+        $buttonRecoverPgroup.Enabled = $true
+    }
+    else
+    {
+        $registerVMs.Enabled = $false
+        $registerVMs.Checked = $false
+        $powerOnVMs.Enabled = $false
+        $powerOnVMs.Checked = $false
+        $buttonRecoverPgroup.Enabled = $false
+    }
 }
 #Operation Functions
 function deleteVMObject{
@@ -2857,6 +3321,7 @@ function configureiSCSI{
                         $iscsiargs.key = "LoginTimeout"
                         $esxcli.iscsi.adapter.discovery.sendtarget.param.set.invoke($iscsiargs) |out-null
                     }
+                    
                 }
                 catch
                 {
@@ -2865,6 +3330,7 @@ function configureiSCSI{
             }
         }
     }
+    $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: iSCSI has been configured for all of the hosts`r`n$($outputTextBox.text)")
 }
 function createMultipathingrule{
     $esxihosts = get-cluster -name $HostClusterDropDownBox.SelectedItem.ToString() |get-vmhost
@@ -2938,6 +3404,314 @@ function createMultipathingrule{
         }
     }
 }
+function rescanCluster{
+    $esxihosts = get-cluster -Name $PgroupClusterDropDownBox.SelectedItem.ToString() |get-vmhost
+    foreach ($esxihost in $esxihosts)
+    {
+        $argList = @($serverTextBox.Text, $usernameTextBox.Text, $passwordTextBox.Text, $esxihost.name)
+                    $job = Start-Job -ScriptBlock{
+                        Connect-VIServer -Server $args[0] -username $args[1] -Password $args[2]
+                       $temphost = Get-VMHost $args[3]
+                        (Get-View $temphost.extensiondata.configManager.storageSystem).RescanAllHba()
+                         (Get-View $temphost.extensiondata.configManager.storageSystem).RescanVmfs()
+                       Disconnect-VIServer -Confirm:$false
+                    } -ArgumentList $argList
+    }
+    get-job |wait-job
+}
+function rescanVMFS{
+    $esxihosts = get-cluster -Name $PgroupClusterDropDownBox.SelectedItem.ToString() |get-vmhost
+    foreach ($esxihost in $esxihosts)
+    {
+        $argList = @($serverTextBox.Text, $usernameTextBox.Text, $passwordTextBox.Text, $esxihost.name)
+                    $job = Start-Job -ScriptBlock{
+                        Connect-VIServer -Server $args[0] -username $args[1] -Password $args[2]
+                        $temphost = Get-VMHost $args[3]
+                        (Get-View $temphost.extensiondata.configManager.storageSystem).RescanVmfs()
+                        Disconnect-VIServer -Confirm:$false
+                    } -ArgumentList $argList
+    }
+    get-job |wait-job 
+}
+function recoverPgroup{
+    try
+    {
+        if ($SnapshotCheckedListBox.GetItemCheckState(0) -eq 'Checked')
+        {
+            $recoverySnapshots = $script:volumeSnapshots
+            if ($recoverySnapshots.count -eq $null)
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Recovering 1 out of 1 snapshots in the snapshot group $($script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name)`r`n$($outputTextBox.text)")
+            }
+            else
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Recovering $($recoverySnapshots.count) out of $($recoverySnapshots.count) snapshots in the snapshot group $($script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name)`r`n$($outputTextBox.text)")
+            }
+        }
+        else
+        {
+            $recoverySnapshots = @()
+            for ($i = 1;$i -lt $SnapshotCheckedListBox.Items.count;$i++)
+            {
+                if ($SnapshotCheckedListBox.GetItemCheckState($i) -eq 'Checked')
+                {
+                    $recoverySnapshots += $script:volumeSnapshots[$i-1]
+                }
+            }
+            if (($recoverySnapshots.count -eq $null) -or ($script:volumeSnapshots.count -eq $null))
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Recovering $($SnapshotCheckedListBox.CheckedItems.count) out of 1 snapshots in the snapshot group $($script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name)`r`n$($outputTextBox.text)")
+            }
+            else
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Recovering $($SnapshotCheckedListBox.CheckedItems.count) out of $($script:volumeSnapshots.count) snapshots in the snapshot group $($script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name)`r`n$($outputTextBox.text)")
+            }
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+    try
+    {
+        getHostGroup
+        $newVolumes =@()
+        foreach ($recoverySnapshot in $recoverySnapshots)
+        {
+            $suffix = Get-Random -minimum 1 -maximum 99999
+            $newName = (($recoverySnapshot.name -split "\.")[2..2] -join ".") + ("--" + $suffix)
+            $newVolumes += New-PfaVolume -array $endpoint -source $recoverySnapshot.name -Volumename $newName
+            $outputTextBox.text = ((get-Date -Format G) + " Creating volume $($newName) from snapshot $($recoverySnapshot.name)`r`n$($outputTextBox.text)")
+            new-pfahostgroupvolumeconnection -array $endpoint -VolumeName $newName -hostgroupname $hostgroup
+        }
+        $outputTextBox.text = ((get-Date -Format G) + " Rescanning cluster...`r`n$($outputTextBox.text)")
+        $cluster =  get-cluster -Name $PgroupClusterDropDownBox.SelectedItem.ToString() -ErrorAction stop
+        rescanCluster
+        $outputTextBox.text = ((get-Date -Format G) + " Rescan complete.`r`n$($outputTextBox.text)")
+        $esxi = $cluster | Get-VMHost -ErrorAction stop
+        $hostchoice = get-random -minimum 0 -maximum ($esxi.count-1)
+        $esxcli=get-esxcli -VMHost $esxi[$hostchoice] -v2 -ErrorAction stop
+        $resigargs =$esxcli.storage.vmfs.snapshot.list.createargs()
+        Start-sleep -s 10
+        $datastoreSystem = get-view $esxi[$hostchoice].ExtensionData.configManager.datastoreSystem
+        $unresolvedvmfs = $datastoreSystem.QueryUnresolvedVmfsVolumes()
+        $resigOp =@()
+        $resigCount = 0
+        $outputTextBox.text = ((get-Date -Format G) + " Identifying unresolved VMFS datastores for $($newVolumes.count) FlashArray volumes...`r`n$($outputTextBox.text)")
+        foreach ($newVolume in $newVolumes)
+        {
+            for ($loopcount = 0; $loopcount -lt $unresolvedvmfs.count; $loopcount++)
+            {
+                if ($unresolvedvmfs[$loopcount].Extent.count -gt 1)
+                {
+                    continue
+                }
+                $unresolvedSerial = ($unresolvedvmfs[$loopcount].Extent[0].Device.DiskName.ToUpper()).substring(12)
+                if ($unresolvedSerial -eq $newVolume.serial)
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Found the unresolved volume $($unresolvedvmfs[$loopcount].Extent[0].Device.DiskName)...`r`n$($outputTextBox.text)")
+                    $resigOp += $esxcli.storage.vmfs.snapshot.resignature.createargs()
+                    $resigOp[$resigCount].volumelabel = $unresolvedvmfs[$loopcount].vmfsLabel
+                    break
+                }
+            }
+            if ($resigOp[$resigCount] -eq $null)
+            {
+                $failAndDelete = $true
+                throw "ERROR: Could not find an unresolved VMFS volume for FlashArray volume $($newVolume.name). Exiting process and deleting volume copies."
+            }
+            $resigCount++
+        }
+        $outputTextBox.text = ((get-Date -Format G) + " Resignaturing $($resigOp.count) volumes...`r`n$($outputTextBox.text)")
+        foreach ($resigOperation in $resigOp)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Resignaturing the VMFS copy $($resigOperation.volumelabel)...`r`n$($outputTextBox.text)")
+            $esxcli.storage.vmfs.snapshot.resignature.invoke($resigOperation)
+            $outputTextBox.text = ((get-Date -Format G) + " Resignature complete.`r`n$($outputTextBox.text)")
+        }
+        rescanVMFS
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+        if ($failAndDelete -eq $true)
+        {
+            foreach ($newVolume in $newVolumes)
+            {
+                remove-pfahostgroupvolumeconnection -array $endpoint -VolumeName $newVolume.name -hostgroupname $hostgroup
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newVolume.name
+                Remove-PfaVolumeOrSnapshot -Array $endpoint -Name $newVolume.name -Eradicate
+            }
+            rescanCluster
+        }
+    }
+    try
+    {
+        if($registerVMs.Checked -eq $false)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The protection group has been recovered to VMware cluster $($cluster.name)`r`n$($outputTextBox.text)")
+        }
+        elseif ($registerVMs.Checked -eq $true)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Registering all found virtual machines on recovered datastores...`r`n$($outputTextBox.text)")
+            $datastores = $cluster| get-datastore  | where-object {$_.Type -eq "VMFS"}|where-object {$newVolumes.serial -contains (($_.ExtensionData.Info.Vmfs.Extent.DiskName.ToUpper()).substring(12))}
+            foreach ($datastore in $datastores)
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " Registering VMs on VMFS $($datastore.name)`r`n$($outputTextBox.text)")
+                $argList = @($serverTextBox.Text, $usernameTextBox.Text, $passwordTextBox.Text, $datastore.name, $cluster.name, $powerOnVMs.Checked)
+                $job = Start-Job -ScriptBlock{
+                try
+                {
+                    Connect-VIServer -Server $args[0] -username $args[1] -Password $args[2]
+                    $esxi = get-cluster $args[4] |get-vmhost
+                    $datastore = get-datastore $args[3]
+                    $logname = get-random -minimum 0 -maximum 99999
+                    $ds = $datastore | %{Get-View $_.Id}
+                    $SearchSpec = New-Object VMware.Vim.HostDatastoreBrowserSearchSpec
+                    $SearchSpec.matchpattern = "*.vmx"
+                    $dsBrowser = Get-View $ds.browser
+                    $vmxfiles = $dsBrowser.SearchDatastoreSubFolders("[$($ds.Summary.Name)]", $SearchSpec) | %{$_.FolderPath + ($_.File | select Path).Path}
+                    foreach($vmxfile in $vmxfiles) 
+                    {
+                        $hostchoice = get-random -minimum 0 -maximum ($esxi.count-1)
+                        $vm = New-VM -VMFilePath $vmxfile -VMHost $esxi[$hostchoice]
+                        if ($vmWarnings -ne $null)
+                        {
+                            $vmWarnings = get-view $vm.ExtensionData.TriggeredAlarmState[0].Alarm
+                            foreach ($vmWarning in $vmWarnings)
+                            {
+                                if ($vmWarning.Info.Description -eq "Default alarm that monitors VM MAC conflicts.")
+                                {
+                                    Remove-VM -VM $vm -confirm:$false
+                                    $vm = New-VM -VMHost ($esxi[$hostchoice]) -VMFilePath $vmxfile -Name $vm.Name -ErrorAction stop 
+                                    break
+                                }
+                            }
+                        }
+                        if ($args[5] -eq $true)
+                        {
+                            $vm |start-vm -RunAsync
+                        }
+                    }               
+                    Disconnect-VIServer -Confirm:$false
+                    }
+                catch
+                {
+                    ("$($error[0]) $($datastore.name) ")|out-file "c:/puretoolerror-$($logname).log" -Append
+                }
+                } -ArgumentList $argList
+            }
+            Get-Job | Wait-Job
+            $datastores |get-vm | Get-VMQuestion | Set-VMQuestion -Option ‘button.uuid.copiedTheVM’ -Confirm:$false
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: The protection group has been recovered to VMware cluster $($cluster.name)`r`n$($outputTextBox.text)")
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function createPgroupSnap{
+    try
+    {
+        if ($PgroupPGDropDownBox.SelectedItem.ToString() -like "*:*")
+        {
+            throw "ERROR: This protection group is remote. Snapshots must be initiated from the source FlashArray."
+        }
+        $pgroup = Get-PfaProtectionGroup -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Name $PgroupPGDropDownBox.SelectedItem.ToString()
+        if ($pgroup.targets.count -ne $null)
+        {
+            $allowedTargets = $false
+            foreach ($targetFA in $pgroup.targets)
+            {
+                if ($targetFA.allowed -eq $true)
+                {
+                    New-PfaProtectionGroupSnapshot -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Protectiongroupname $PgroupPGDropDownBox.SelectedItem.ToString() -ApplyRetention -ReplicateNow
+                    $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Created snapshot, replicated it, and then applied retention`r`n$($outputTextBox.text)")
+                    $outputTextBox.text = ((get-Date -Format G) + " NOTICE: It might take some time for replication to complete.`r`n$($outputTextBox.text)")
+                    $allowedTargets = $true
+                    break
+                }
+            }
+            if ($allowedTargets -eq $false)
+            {
+                New-PfaProtectionGroupSnapshot -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Protectiongroupname $PgroupPGDropDownBox.SelectedItem.ToString() -ApplyRetention
+                $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Created local snapshot and applied retention`r`n$($outputTextBox.text)")
+            }
+        }
+        else
+        {
+            New-PfaProtectionGroupSnapshot -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Protectiongroupname $PgroupPGDropDownBox.SelectedItem.ToString() -ApplyRetention
+            $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Created local snapshot and applied retention`r`n$($outputTextBox.text)")
+        }
+        getProtectionGroupSnapshots
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function deletePgroupSnap{
+    try
+    {
+        $selectedPiT = $script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name
+        $deletedPgroupSnapshot = Remove-PfaProtectionGroupOrSnapshot -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Name $selectedPiT 
+        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Deleted snapshot group $($deletedPgroupSnapshot.name)`r`n$($outputTextBox.text)")
+        getProtectionGroupSnapshots
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
+function addToPgroup{
+    try
+    {
+        $vols = Get-PfaVolumes -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] 
+        $volumesToAdd = @()
+        $existPGvols = Get-PfaProtectionGroup -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -name $PgroupPGDropDownBox.SelectedItem.ToString()
+        for ($i = 1;$i -lt $AddToPgroupCheckedListBox.Items.count;$i++)
+        {
+            if ($AddToPgroupCheckedListBox.GetItemCheckState($i) -eq 'Checked')
+            {
+                $serial = ($script:datastoresOnFA[$i-1].ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique)
+                $serial = ($serial.ToUpper()).substring(12)
+                $volMatch = $vols |where-object {$_.serial -eq $serial}
+                if ($volMatch -eq $null)
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " Could not find the datastore $($script:datastoresOnFA[$i-1].name) Skipping...`r`n$($outputTextBox.text)")
+                    continue
+                }
+                elseif ($existPGvols.volumes -contains $volMatch.name)
+                {
+                    $outputTextBox.text = ((get-Date -Format G) + " This  protection group already contains datastore $($script:datastoresOnFA[$i-1].name) Skipping...`r`n$($outputTextBox.text)")
+                    continue
+                }
+                else
+                {
+                    $volumesToAdd += $volMatch.name
+                }
+            }
+        }
+        if ($volumesToAdd.count -ne 0)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " Adding $($volumesToAdd.count) datastores to the protection group $($PgroupPGDropDownBox.SelectedItem.ToString())...`r`n$($outputTextBox.text)")
+            foreach ($volumeToAdd in $volumesToAdd)
+            {
+                Add-PfaVolumesToProtectionGroup -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -VolumesToAdd $volumeToAdd -Name $PgroupPGDropDownBox.SelectedItem.ToString()
+            }
+            $outputTextBox.text = ((get-Date -Format G) + " SUCCESS: Added $($volumesToAdd.count) datastores to the protection group $($PgroupPGDropDownBox.SelectedItem.ToString()).`r`n$($outputTextBox.text)")
+        }
+        else
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " FAILED: Could not identify any volumes to add to the protection group.`r`n$($outputTextBox.text)")
+        }
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)")
+    }
+}
 [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") 
 [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") 
 ##################Main Form Definition
@@ -2977,6 +3751,10 @@ function createMultipathingrule{
     $HostTab = New-Object System.Windows.Forms.TabPage
     $HostTab.Text = "Host Management”
     $tabControl.Controls.Add($HostTab)
+    
+    $PgrpTab = New-Object System.Windows.Forms.TabPage
+    $PgrpTab.Text = "Protection Group Recovery”
+    $tabControl.Controls.Add($PgrpTab)
 
 
 ################## Connection GroupBox Definition
@@ -3127,7 +3905,27 @@ function createMultipathingrule{
     $groupBoxMultipathing.text = "ESXi Multipathing Configuration:" 
     $HostTab.Controls.Add($groupBoxMultipathing) 
 
-        ################## Host Radio Select Definition
+    ################## Pgroup GroupBox Definition
+
+    $groupBoxFilterPgroup = New-Object System.Windows.Forms.GroupBox
+    $groupBoxFilterPgroup.Location = New-Object System.Drawing.Size(10,245) 
+    $groupBoxFilterPgroup.size = New-Object System.Drawing.Size(695,120) 
+    $groupBoxFilterPgroup.text = "Filter Protection Groups:" 
+
+    $groupBoxPgrp = New-Object System.Windows.Forms.GroupBox
+    $groupBoxPgrp.Location = New-Object System.Drawing.Size(10,10) 
+    $groupBoxPgrp.size = New-Object System.Drawing.Size(730,290) 
+    $groupBoxPgrp.text = "Recover Volumes from Protection Group:" 
+    $PgrpTab.Controls.Add($groupBoxPgrp) 
+
+    $groupBoxVMFSPgrp = New-Object System.Windows.Forms.GroupBox
+    $groupBoxVMFSPgrp.Location = New-Object System.Drawing.Size(750,10) 
+    $groupBoxVMFSPgrp.size = New-Object System.Drawing.Size(195,290) 
+    $groupBoxVMFSPgrp.text = "Add Datastores to Group:" 
+    $PgrpTab.Controls.Add($groupBoxVMFSPgrp) 
+
+
+    ################## Host Radio Select Definition
 
     $RadioButtoniSCSI = New-Object System.Windows.Forms.RadioButton #create the radio button
     $RadioButtoniSCSI.Location = new-object System.Drawing.Point(10,30) #location of the radio button(px) in relation to the group box's edges (length, height)
@@ -3211,7 +4009,7 @@ function createMultipathingrule{
     $LabelAbout = New-Object System.Windows.Forms.Label
     $LabelAbout.Location = New-Object System.Drawing.Point(10, 20)
     $LabelAbout.Size = New-Object System.Drawing.Size(190, 300)
-    $LabelAbout.Text = "Pure Storage FlashArray VMware Storage Manager`r`n`r`nVersion 2.5.0`r`n`r`nBy Cody Hosterman`r`n`r`nwww.codyhosterman.com`r`n`r`n@codyhosterman`r`n`r`nRequires:`r`n---------------------------------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+`r`n`r`nFlashArray//M or`r`n`r`nFlashArray 400 Series`r`n`r`nhttps://github.com/codyhosterman/powercli/blob/master/PureStorageVMwareStorageTool.ps1"
+    $LabelAbout.Text = "Pure Storage FlashArray VMware Storage Manager`r`n`r`nVersion 2.7.0`r`n`r`nBy Cody Hosterman`r`n`r`nwww.codyhosterman.com`r`n`r`n@codyhosterman`r`n`r`nRequires:`r`n---------------------------------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+`r`n`r`nFlashArray//M or`r`n`r`nFlashArray 400 Series`r`n`r`nhttps://github.com/codyhosterman/powercli/blob/master/PureStorageVMwareStorageTool.ps1"
     $groupBoxInfo.Controls.Add($LabelAbout)  
 
     $LabelClusterFilter = New-Object System.Windows.Forms.Label
@@ -3363,6 +4161,38 @@ function createMultipathingrule{
     $LabSATP.Size = New-Object System.Drawing.Size(180, 50)
     $LabSATP.Text = "Creates FlashArray default multipathing rule on hosts in cluster (Round Robin & IO Operations Limit to 1):"
     $groupBoxMultipathing.Controls.Add($LabSATP)
+
+    ################## Pgroup Label Definition
+
+    $LabelPgroupFA = New-Object System.Windows.Forms.Label
+    $LabelPgroupFA.Location = New-Object System.Drawing.Point(10, 40)
+    $LabelPgroupFA.Size = New-Object System.Drawing.Size(100, 14)
+    $LabelPgroupFA.Text = "Select FlashArray:"
+    $groupBoxFilterPgroup.Controls.Add($LabelPgroupFA)
+
+    $LabelChoosePG = New-Object System.Windows.Forms.Label
+    $LabelChoosePG.Location = New-Object System.Drawing.Point(10, 30)
+    $LabelChoosePG.Size = New-Object System.Drawing.Size(130, 14)
+    $LabelChoosePG.Text = "Select Protection Group:"
+    $groupBoxPgrp.Controls.Add($LabelChoosePG)
+
+    $LabelChoosePiT = New-Object System.Windows.Forms.Label
+    $LabelChoosePiT.Location = New-Object System.Drawing.Point(10, 60)
+    $LabelChoosePiT.Size = New-Object System.Drawing.Size(130, 14)
+    $LabelChoosePiT.Text = "Select Point-in-Time:"
+    $groupBoxPgrp.Controls.Add($LabelChoosePiT)
+
+    $LabelChooseSnap = New-Object System.Windows.Forms.Label
+    $LabelChooseSnap.Location = New-Object System.Drawing.Point(10, 90)
+    $LabelChooseSnap.Size = New-Object System.Drawing.Size(130, 28)
+    $LabelChooseSnap.Text = "Select Volume(s) to Recover:"
+    $groupBoxPgrp.Controls.Add($LabelChooseSnap)
+
+    $LabelChooseClusterPgrp = New-Object System.Windows.Forms.Label
+    $LabelChooseClusterPgrp.Location = New-Object System.Drawing.Point(10, 180)
+    $LabelChooseClusterPgrp.Size = New-Object System.Drawing.Size(130, 14)
+    $LabelChooseClusterPgrp.Text = "Select Cluster:"
+    $groupBoxPgrp.Controls.Add($LabelChooseClusterPgrp)
 
 ##################Connection Button Definition
 
@@ -3566,6 +4396,45 @@ function createMultipathingrule{
     $buttonConfigureSATP.Enabled = $false #Disabled by default
     $groupBoxMultipathing.Controls.Add($buttonConfigureSATP)
 
+    ##################Pgroup Button Definition
+
+    $buttonRecoverPgroup = New-Object System.Windows.Forms.Button
+    $buttonRecoverPgroup.add_click({recoverPgroup})
+    $buttonRecoverPgroup.Text = "Recover"
+    $buttonRecoverPgroup.Top=250
+    $buttonRecoverPgroup.Left=300
+    $buttonRecoverPgroup.Width=100
+    $buttonRecoverPgroup.Enabled = $false #Disabled by default
+    $groupBoxPgrp.Controls.Add($buttonRecoverPgroup) 
+
+    $buttonCreatePgroupSnap = New-Object System.Windows.Forms.Button
+    $buttonCreatePgroupSnap.add_click({createPgroupSnap})
+    $buttonCreatePgroupSnap.Text = "Create Point-in-Time"
+    $buttonCreatePgroupSnap.Top=27
+    $buttonCreatePgroupSnap.Left=600
+    $buttonCreatePgroupSnap.Width=120
+    $buttonCreatePgroupSnap.Enabled = $false #Disabled by default
+    $groupBoxPgrp.Controls.Add($buttonCreatePgroupSnap) 
+
+    $buttonDeletePgroupSnap = New-Object System.Windows.Forms.Button
+    $buttonDeletePgroupSnap.add_click({deletePgroupSnap})
+    $buttonDeletePgroupSnap.Text = "Delete Point-in-Time"
+    $buttonDeletePgroupSnap.Top=57
+    $buttonDeletePgroupSnap.Left=600
+    $buttonDeletePgroupSnap.Width=120
+    $buttonDeletePgroupSnap.Enabled = $false #Disabled by default
+    $groupBoxPgrp.Controls.Add($buttonDeletePgroupSnap) 
+
+
+    $buttonAddVMFStoPgroup = New-Object System.Windows.Forms.Button
+    $buttonAddVMFStoPgroup.add_click({addToPgroup})
+    $buttonAddVMFStoPgroup.Text = "<< Add to Protection Group"
+    $buttonAddVMFStoPgroup.Top=255
+    $buttonAddVMFStoPgroup.Left=20
+    $buttonAddVMFStoPgroup.Width=150
+    $buttonAddVMFStoPgroup.Enabled = $false #Disabled by default
+    $groupBoxVMFSPgrp.Controls.Add($buttonAddVMFStoPgroup)
+
 ##################Connection TextBox Definition
 
     $serverTextBox = New-Object System.Windows.Forms.TextBox 
@@ -3667,7 +4536,7 @@ function createMultipathingrule{
     $CheckBoxDeleteVMObject = new-object System.Windows.Forms.checkbox
     $CheckBoxDeleteVMObject.Location = new-object System.Drawing.Size(8,20)
     $CheckBoxDeleteVMObject.Size = new-object System.Drawing.Size(185,32)
-    $CheckBoxDeleteVMObject.Text = "I confirm I want to delete this virtual machine"
+    $CheckBoxDeleteVMObject.Text = "I confirm that I want to delete this virtual machine"
     $CheckBoxDeleteVMObject.add_CheckedChanged({vmDeleteCheckedChanged})
     $CheckBoxDeleteVMObject.Checked = $false
     $CheckBoxDeleteVMObject.Enabled = $false
@@ -3676,12 +4545,30 @@ function createMultipathingrule{
     $CheckBoxDeleteVMObjectSnapshot = new-object System.Windows.Forms.checkbox
     $CheckBoxDeleteVMObjectSnapshot.Location = new-object System.Drawing.Size(8,20)
     $CheckBoxDeleteVMObjectSnapshot.Size = new-object System.Drawing.Size(185,32)
-    $CheckBoxDeleteVMObjectSnapshot.Text = "I confirm I want to delete this snapshot"
+    $CheckBoxDeleteVMObjectSnapshot.Text = "I confirm that I want to delete this snapshot"
     $CheckBoxDeleteVMObjectSnapshot.add_CheckedChanged({vmDeleteSnapshotCheckedChanged})
     $CheckBoxDeleteVMObjectSnapshot.Checked = $false
     $CheckBoxDeleteVMObjectSnapshot.Enabled = $false
-    $groupBoxDeleteVMSnapshot.Controls.Add($CheckBoxDeleteVMObjectSnapshot) 
+    $groupBoxDeleteVMSnapshot.Controls.Add($CheckBoxDeleteVMObjectSnapshot)
+     
+##################Pgroup CheckBox Definition
 
+    $registerVMs = new-object System.Windows.Forms.checkbox
+    $registerVMs.Location = new-object System.Drawing.Size(220,218)
+    $registerVMs.Size = new-object System.Drawing.Size(150,20)
+    $registerVMs.Text = "Register all VMs"
+    $registerVMs.Checked = $false
+    $registerVMs.Enabled = $false
+    $registerVMs.add_CheckedChanged({registerVMchanged})
+    $groupBoxPgrp.Controls.Add($registerVMs) 
+
+    $powerOnVMs = new-object System.Windows.Forms.checkbox
+    $powerOnVMs.Location = new-object System.Drawing.Size(380,218)
+    $powerOnVMs.Size = new-object System.Drawing.Size(150,20)
+    $powerOnVMs.Text = "Power-on all VMs"
+    $powerOnVMs.Checked = $false
+    $powerOnVMs.Enabled = $false
+    $groupBoxPgrp.Controls.Add($powerOnVMs) 
 
 ##################Connection DropDownBox Definition
 
@@ -3846,9 +4733,69 @@ function createMultipathingrule{
     $HostFlashArrayDropDownBox.add_SelectedIndexChanged({clusterConfigSelectionChanged})
     $groupBoxChooseHost.Controls.Add($HostFlashArrayDropDownBox)
 
+    ######################## Pgroup Drop Downs
+
+    $PgroupFADropDownBox = New-Object System.Windows.Forms.ComboBox
+    $PgroupFADropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $PgroupFADropDownBox.Location = New-Object System.Drawing.Size(120,35) 
+    $PgroupFADropDownBox.Size = New-Object System.Drawing.Size(550,20) 
+    $PgroupFADropDownBox.DropDownHeight = 200
+    $PgroupFADropDownBox.Enabled=$false
+    $PgroupFADropDownBox.add_SelectedIndexChanged({pgroupFAChanged})
+    $groupBoxFilterPgroup.Controls.Add($PgroupFADropDownBox)
+
+    $PgroupPGDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $PgroupPGDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $PgroupPGDropDownBox.Location = New-Object System.Drawing.Size(140,28) 
+    $PgroupPGDropDownBox.Size = New-Object System.Drawing.Size(450,20) 
+    $PgroupPGDropDownBox.DropDownHeight = 200
+    $PgroupPGDropDownBox.Enabled=$false
+    $PgroupPGDropDownBox.add_SelectedIndexChanged({getProtectionGroupSnapshots})
+    $groupBoxPgrp.Controls.Add($PgroupPGDropDownBox)
+
+    $PgroupSnapDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $PgroupSnapDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $PgroupSnapDropDownBox.Location = New-Object System.Drawing.Size(140,58) 
+    $PgroupSnapDropDownBox.Size = New-Object System.Drawing.Size(450,20) 
+    $PgroupSnapDropDownBox.DropDownHeight = 200
+    $PgroupSnapDropDownBox.Enabled=$false
+    $PgroupSnapDropDownBox.add_SelectedIndexChanged({getPiTSnapshots})
+    $groupBoxPgrp.Controls.Add($PgroupSnapDropDownBox)
+
+    $PgroupClusterDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $PgroupClusterDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $PgroupClusterDropDownBox.Location = New-Object System.Drawing.Size(140,178) 
+    $PgroupClusterDropDownBox.Size = New-Object System.Drawing.Size(450,20) 
+    $PgroupClusterDropDownBox.DropDownHeight = 200
+    $PgroupClusterDropDownBox.Enabled=$false
+    $PgroupClusterDropDownBox.add_SelectedIndexChanged({pgroupcheckboxes})
+    $groupBoxPgrp.Controls.Add($PgroupClusterDropDownBox)
+    
+   ##################Pgroup CheckedList Box
+
+    $SnapshotCheckedListBox = New-Object -TypeName System.Windows.Forms.CheckedListBox
+    $SnapshotCheckedListBox.Location = New-Object System.Drawing.Size(140,88) 
+    $SnapshotCheckedListBox.Size = New-Object System.Drawing.Size(450,80)
+    $SnapshotCheckedListBox.Enabled=$false
+    $SnapshotCheckedListBox.CheckOnClick = $true
+    $SnapshotCheckedListBox.Add_Click({snapshotSelectAll})
+    $groupBoxPgrp.Controls.Add($SnapshotCheckedListBox)
+
+    $AddToPgroupCheckedListBox = New-Object -TypeName System.Windows.Forms.CheckedListBox
+    $AddToPgroupCheckedListBox.Location = New-Object System.Drawing.Size(10,20) 
+    $AddToPgroupCheckedListBox.Size = New-Object System.Drawing.Size(175,240)
+    $AddToPgroupCheckedListBox.Enabled=$false
+    $AddToPgroupCheckedListBox.CheckOnClick = $true
+    $AddToPgroupCheckedListBox.Add_Click({enableAddtoPG})
+    $groupBoxVMFSPgrp.Controls.Add($AddToPgroupCheckedListBox)
+
+
 ##################Show Form
 
     $main_form.Add_Shown({$main_form.Activate()})
     [void] $main_form.ShowDialog()
 
    
+
+
+
