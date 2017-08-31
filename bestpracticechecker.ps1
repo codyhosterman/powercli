@@ -72,11 +72,11 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v3.0'
+add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v3.1'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
-. “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+. "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" |out-null
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
 
