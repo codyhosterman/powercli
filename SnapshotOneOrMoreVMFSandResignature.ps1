@@ -662,11 +662,11 @@ try
     if ($snapshotNameSuffix -ne "")
     {
         add-content $logfile "Snapshot suffix will be $($snapshotNameSuffix)"
-        $snapshots = New-PfaVolumeSnapshots -Array $endpoint -Sources $selectedVolumes -Suffix $snapshotNameSuffix
+        $snapshots = New-PfaVolumeSnapshots -Array $endpoint -Sources $selectedFAVolumes -Suffix $snapshotNameSuffix
     }
     else
     {
-       $snapshots = New-PfaVolumeSnapshots -Array $endpoint -Sources $selectedVolumes
+       $snapshots = New-PfaVolumeSnapshots -Array $endpoint -Sources $selectedFAVolumes
     }
 }
 catch
