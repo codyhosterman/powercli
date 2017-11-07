@@ -2616,29 +2616,26 @@ function createHost{
     }
     elseif ($RadioButtonHostFC.Checked -eq $true)
     {
-        if ($createhostfail -eq $false)
+        $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+        $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
+        $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
         {
-            $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
-            $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
-            $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+                $wwns.substring($i,16)
+        }}
+        try
+        {
+            $newfahost = New-PfaHost -Array $endpoint -Name $esxihost.NetworkInfo.HostName -ErrorAction stop
+            foreach ($wwn in $wwns)
             {
-                    $wwns.substring($i,16)
-            }}
-            try
-            {
-                $newfahost = New-PfaHost -Array $endpoint -Name $esxihost.NetworkInfo.HostName -ErrorAction stop
-                foreach ($wwn in $wwns)
-                {
-                    Add-PfaHostWwns -Array $endpoint -Name $esxihost.NetworkInfo.HostName -AddWwnList $wwn -ErrorAction stop |out-null
-                }
+                Add-PfaHostWwns -Array $endpoint -Name $esxihost.NetworkInfo.HostName -AddWwnList $wwn -ErrorAction stop |out-null
             }
-            catch
-            {
-                $outputTextBox.text = ((get-Date -Format G) + " ********ERROR********`r`n$($outputTextBox.text)")
-                $outputTextBox.text = ((get-Date -Format G) + " $($error[0])`r`n$($outputTextBox.text)")
-                $outputTextBox.text = ((get-Date -Format G) + " The host $($esxihost.NetworkInfo.HostName) failed to create. Review error.`r`n$($outputTextBox.text)")
-                return
-            }
+        }
+        catch
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " ********ERROR********`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " $($error[0])`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " The host $($esxihost.NetworkInfo.HostName) failed to create. Review error.`r`n$($outputTextBox.text)")
+            return
         }
     }
     try
