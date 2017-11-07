@@ -19,11 +19,11 @@ Supports:
 -PowerShell 3.0 or later
 -Pure Storage PowerShell SDK 1.7 or later
 -PowerCLI 6.3 Release 1+
--Purity 4.1 and later
+-Purity 4.7 and later
 -FlashArray 400 Series and //m
 -vCenter 5.5 and later
 
-'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.7.0'
+'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.8.0'
 #>
 #Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
 #Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
@@ -528,7 +528,12 @@ function getHostGroup{
                 $recoveryobject = get-cluster -Name $RecoveryClusterDropDownBox.SelectedItem.ToString()
             }
         }
-        if ($TabControl.SelectedIndex -eq 3)
+        elseif ($TabControl.SelectedIndex -eq 2)
+        {
+            $recoveryobject = get-cluster -name $HostClusterDropDownBox.SelectedItem.ToString() 
+            
+        }
+        elseif ($TabControl.SelectedIndex -eq 3)
         {
             $script:endpoint = $endpoints[$PgroupFADropDownBox.SelectedIndex-1]
             $recoveryobject = get-cluster -Name $PgroupClusterDropDownBox.SelectedItem.ToString()
@@ -595,11 +600,11 @@ function getHostGroup{
         }
         if ($hostgroup -eq $null)
         {
-            $outputTextBox.text = ((get-Date -Format G) + " No matching host group could be found") + ("`r`n") + $outputTextBox.text
+            $outputTextBox.text = ((get-Date -Format G) + " No matching host group on $($endpoint.endpoint) could be found") + ("`r`n") + $outputTextBox.text
         }
         else
         {
-           $outputTextBox.text = ((get-Date -Format G) + " The host group identified is named $($hostgroup)`r`n$($outputTextBox.text)") 
+           $outputTextBox.text = ((get-Date -Format G) + " The host group identified on FlashArray $($endpoint.endpoint) is named $($hostgroup)`r`n$($outputTextBox.text)") 
         }
     }
     catch
@@ -1073,6 +1078,23 @@ function getPgroupDatastores{
         }
     }
     catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
+function getHosts{
+    try 
+    {
+        $AddHostDropDownBox.Items.Clear()
+        $esxihosts = get-cluster -name $HostClusterDropDownBox.SelectedItem.ToString() |get-vmhost
+        foreach ($esxihost in $esxihosts) 
+        {
+            $AddHostDropDownBox.Items.Add($esxihost.Name) #Add hosts to DropDown List
+        } 
+        $AddHostDropDownBox.Enabled = $true
+        $AddHostDropDownBox.SelectedIndex = 0
+    }
+    catch 
     {
         $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
     }
@@ -1604,8 +1626,13 @@ function clusterConfigSelectionChanged{
             $script:RadioButtoniSCSI.Checked = $true
             $script:RadioButtonFC.Enabled = $true
             $buttonCreateHostGroup.Enabled = $true
+            $script:RadioButtonHostiSCSI.Enabled = $true
+            $script:RadioButtonHostiSCSI.Checked = $true
+            $script:RadioButtonHostFC.Enabled = $true
+            $buttonAddHosts.Enabled = $true
             $buttonConfigureiSCSI.Enabled = $true
             $buttonConfigureSATP.Enabled = $true
+            getHosts
         }
         else
         {
@@ -1616,6 +1643,12 @@ function clusterConfigSelectionChanged{
             $buttonCreateHostGroup.Enabled = $false
             $buttonConfigureiSCSI.Enabled = $false
             $buttonConfigureSATP.Enabled = $false
+            $script:RadioButtonHostiSCSI.Enabled = $false
+            $script:RadioButtonHostiSCSI.Checked = $false
+            $script:RadioButtonHostFC.Enabled = $false
+            $buttonAddHosts.Enabled = $false
+            $AddHostDropDownBox.Enabled = $false
+            $AddHostDropDownBox.Items.Clear()
         }
     }
     catch
@@ -1977,6 +2010,37 @@ function pgroupcheckboxes{
     }
 }
 #Operation Functions
+function addHost{
+    try 
+    {
+        if ($HostFlashArrayDropDownBox.SelectedItem.ToString() -eq "Select All FlashArrays")
+        {
+            foreach ($FAendpoint in $endpoints)
+            {
+                $script:endpoint = $FAendpoint
+                getHostGroup
+                createHost
+            }
+        }
+        else
+        {
+            foreach ($FAendpoint in $endpoints)
+            {
+                if ($HostFlashArrayDropDownBox.SelectedItem.ToString() -eq $FAendpoint.endpoint)
+                {
+                    $script:endpoint = $FAendpoint
+                    break
+                }
+            }
+            getHostGroup
+            createHost
+        }
+    }
+    catch 
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+    }
+}
 function deleteVMObject{
     if ($script:RadioButtonVM.Checked -eq $true)
     {
@@ -2397,18 +2461,17 @@ function createHostGroup{
                          }
                         catch
                         {
-                            add-content $logfile ("********ERROR********")
-                            add-content $logfile ("The host " + $esxihost.NetworkInfo.HostName + " failed to create. Review error. Cleaning up this FlashArray and moving on.")
+                            $outputTextBox.text = ((get-Date -Format G) + "ERROR: The host $($esxihost.NetworkInfo.HostName) failed to create. Review error. Cleaning up this FlashArray and moving on.`r`n$($outputTextBox.text)")
                             $hostgroupfailed = $true
-                            add-content $logfile $error[0]
+                            $outputTextBox.text = ((get-Date -Format G) + " $($error[0])`r`n$($outputTextBox.text)")
                             $createhostfail = $true
                             if ($newfahosts.count -ge 1)
                             {
-                                add-content $logfile ("Deleting the " + $newfahosts.count + " hosts on this FlashArray that were created by this script")
+                                $outputTextBox.text = ((get-Date -Format G) + " Deleting the $($newfahosts.count) hosts on this FlashArray that were created by this script`r`n$($outputTextBox.text)")
                                 foreach ($removehost in $newfahosts)
                                 {
                                     Remove-PfaHost -Array $flasharray -Name $removehost.Name |out-null
-                                    add-content $logfile ("Removed host " + $removehost.Name)
+                                    $outputTextBox.text = ((get-Date -Format G) + " Removed host $($removehost.Name)`r`n$($outputTextBox.text)")
                                 }
                             }
                         }
@@ -2455,6 +2518,142 @@ function createHostGroup{
                 }
             }
         }
+    }
+}
+function createHost{
+    $esxihost = get-vmhost -name $AddHostDropDownBox.SelectedItem.ToString()
+    $outputTextBox.text = ((get-Date -Format G) + " Creating host for $($esxihost.name) on FlashArray $($endpoint.endpoint) and adding to host group `r`n$($outputTextBox.text)") 
+    try
+    {
+        $fahosts = Get-PFAHosts -array $endpoint -ErrorAction Stop
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " ERROR: Could not obtain host information from the FlashArray. Check FlashArray for errors. `r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+        return
+    } 
+    $iqnexist = $false
+    $wwnsexist = $false
+    if ($RadioButtonHostiSCSI.Checked -eq $true)
+    {
+        $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
+        if ($iscsiadapter -eq $null)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " ERROR: No Software iSCSI adapter found on host " + $esxihost.NetworkInfo.HostName + ". No changes were made.`r`n$($outputTextBox.text)")
+            return
+        }
+        else
+        {
+            $iqn = $iscsiadapter.ExtensionData.IScsiName
+            foreach ($esxi in $fahosts)
+            {
+                if ($esxi.iqn.count -ge 1)
+                {
+                    foreach($fahostiqn in $esxi.iqn)
+                    {
+                        if ($iqn.ToLower() -eq $fahostiqn.ToLower())
+                        {
+                            $hostgroupfailed = $true
+                            $iqnexist = $true
+                            return
+                        }
+                    }
+                }
+            }
+        }
+    }
+    elseif ($RadioButtonHostFC.Checked -eq $true)
+    {
+        $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+        $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
+        $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+        {
+                $wwns.substring($i,16)
+        }}
+        if ($wwns -eq $null)
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " No FC WWNs found on host $($esxihost.NetworkInfo.HostName). No changes were made.`r`n$($outputTextBox.text)")
+            return
+        }
+        else
+        {
+            foreach ($wwn in $wwns)
+            {
+                foreach ($esxi in $fahosts)
+                {
+                    if ($esxi.wwn.count -ge 1)
+                    {
+                        foreach($fahostwwn in $esxi.wwn)
+                        {
+                            if ($wwn.ToLower() -eq $fahostwwn.ToLower())
+                            {
+                                $outputTextBox.text = ((get-Date -Format G) + " ERROR: The ESXi WWN $($wwn) already exists on the FlashArray.`r`n$($outputTextBox.text)")  
+                                $wwnsexist = $true
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $outputTextBox.text = ((get-Date -Format G) + " Creating the host on the FlashArray $($endpoint.endpoint)`r`n$($outputTextBox.text)")
+    if ($RadioButtonHostiSCSI.Checked -eq $true)
+    {
+        $iscsiadapter = $esxihost | Get-VMHostHBA -Type iscsi | Where {$_.Model -eq "iSCSI Software Adapter"}
+        $iqn = $iscsiadapter.ExtensionData.IScsiName
+        try
+        {
+            $newfahost = New-PfaHost -Array $endpoint -Name $esxihost.NetworkInfo.HostName -IqnList $iqn -ErrorAction stop
+        }
+        catch
+        {
+            $outputTextBox.text = ((get-Date -Format G) + " ERROR: The host $($esxihost.NetworkInfo.HostName) failed to create. Review error.`r`n$($outputTextBox.text)")
+            $outputTextBox.text = ((get-Date -Format G) + " $($Error[0])`r`n$($outputTextBox.text)") 
+            return
+        }
+    }
+    elseif ($RadioButtonHostFC.Checked -eq $true)
+    {
+        if ($createhostfail -eq $false)
+        {
+            $wwns = $esxihost | Get-VMHostHBA -Type FibreChannel | Select VMHost,Device,@{N="WWN";E={"{0:X}" -f $_.PortWorldWideName}} | Format-table -Property WWN -HideTableHeaders |out-string
+            $wwns = (($wwns.Replace("`n","")).Replace("`r","")).Replace(" ","")
+            $wwns = &{for ($i = 0;$i -lt $wwns.length;$i += 16)
+            {
+                    $wwns.substring($i,16)
+            }}
+            try
+            {
+                $newfahost = New-PfaHost -Array $endpoint -Name $esxihost.NetworkInfo.HostName -ErrorAction stop
+                foreach ($wwn in $wwns)
+                {
+                    Add-PfaHostWwns -Array $endpoint -Name $esxihost.NetworkInfo.HostName -AddWwnList $wwn -ErrorAction stop |out-null
+                }
+            }
+            catch
+            {
+                $outputTextBox.text = ((get-Date -Format G) + " ********ERROR********`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " $($error[0])`r`n$($outputTextBox.text)")
+                $outputTextBox.text = ((get-Date -Format G) + " The host $($esxihost.NetworkInfo.HostName) failed to create. Review error.`r`n$($outputTextBox.text)")
+                return
+            }
+        }
+    }
+    try
+    {
+        Add-PfaHosts -Array $endpoint -Name $hostgroup -hoststoadd $newfahost.name |Out-Null
+        $outputTextBox.text = ((get-Date -Format G) + " COMPLETE: Host added to host group on FlashArray $($endpoint.endpoint)`r`n$($outputTextBox.text)")
+    }
+    catch
+    {
+        $outputTextBox.text = ((get-Date -Format G) + " ********ERROR********`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " $($error[0])`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " The host failed to add to the host group. Review error.`r`n$($outputTextBox.text)")
+        $outputTextBox.text = ((get-Date -Format G) + " Removing the earlier created host`r`n$($outputTextBox.text)")
+        Remove-PfaHost -Array $endpoint -Name $newfahost.name |out-null
+        return
     }
 }
 function newSnapshot{  
@@ -3899,6 +4098,12 @@ function addToPgroup{
     $groupBoxHGroup.text = "Host Group Creation:" 
     $HostTab.Controls.Add($groupBoxHGroup) 
 
+    $groupBoxAddHost = New-Object System.Windows.Forms.GroupBox
+    $groupBoxAddHost.Location = New-Object System.Drawing.Size(10,130) 
+    $groupBoxAddHost.size = New-Object System.Drawing.Size(200,160) 
+    $groupBoxAddHost.text = "Add New ESXi Host to Host Group:" 
+    $HostTab.Controls.Add($groupBoxAddHost)
+
     $groupBoxMultipathing = New-Object System.Windows.Forms.GroupBox
     $groupBoxMultipathing.Location = New-Object System.Drawing.Size(430,20) 
     $groupBoxMultipathing.size = New-Object System.Drawing.Size(200,100) 
@@ -3940,6 +4145,20 @@ function addToPgroup{
     $RadioButtonFC.Text = "Fibre Channel" #labeling the radio button
     $RadioButtonFC.Enabled = $false
     $groupBoxHGroup.Controls.Add($RadioButtonFC) #activate the inside the group box
+
+    $RadioButtonHostiSCSI = New-Object System.Windows.Forms.RadioButton #create the radio button
+    $RadioButtonHostiSCSI.Location = new-object System.Drawing.Point(10,30) #location of the radio button(px) in relation to the group box's edges (length, height)
+    $RadioButtonHostiSCSI.size = New-Object System.Drawing.Size(60,20) #the size in px of the radio button (length, height)
+    $RadioButtonHostiSCSI.Text = "iSCSI" #labeling the radio button
+    $RadioButtonHostiSCSI.Enabled = $false
+    $groupBoxAddHost.Controls.Add($RadioButtonHostiSCSI) #activate the inside the group box
+
+    $RadioButtonHostFC = New-Object System.Windows.Forms.RadioButton #create the radio button
+    $RadioButtonHostFC.Location = new-object System.Drawing.Point(90,30) #location of the radio button(px) in relation to the group box's edges (length, height)
+    $RadioButtonHostFC.size = New-Object System.Drawing.Size(100,20) #the size in px of the radio button (length, height)
+    $RadioButtonHostFC.Text = "Fibre Channel" #labeling the radio button
+    $RadioButtonHostFC.Enabled = $false
+    $groupBoxAddHost.Controls.Add($RadioButtonHostFC) #activate the inside the group box
 
 
     ##################VM Radio Select Definition
@@ -4009,7 +4228,7 @@ function addToPgroup{
     $LabelAbout = New-Object System.Windows.Forms.Label
     $LabelAbout.Location = New-Object System.Drawing.Point(10, 20)
     $LabelAbout.Size = New-Object System.Drawing.Size(190, 300)
-    $LabelAbout.Text = "Pure Storage FlashArray VMware Storage Manager`r`n`r`nVersion 2.7.0`r`n`r`nBy Cody Hosterman`r`n`r`nwww.codyhosterman.com`r`n`r`n@codyhosterman`r`n`r`nRequires:`r`n---------------------------------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+`r`n`r`nFlashArray//M or`r`n`r`nFlashArray 400 Series`r`n`r`nhttps://github.com/codyhosterman/powercli/blob/master/PureStorageVMwareStorageTool.ps1"
+    $LabelAbout.Text = "Pure Storage FlashArray VMware Storage Manager`r`n`r`nVersion 2.8.0`r`n`r`nBy Cody Hosterman`r`n`r`nwww.codyhosterman.com`r`n`r`n@codyhosterman`r`n`r`nRequires:`r`n---------------------------------------`r`nVMware PowerCLI 6.3+`r`n`r`nPure Storage PowerShell SDK 1.7+`r`n`r`nFlashArray//M or`r`n`r`nFlashArray 400 Series`r`n`r`nhttps://github.com/codyhosterman/powercli/blob/master/PureStorageVMwareStorageTool.ps1"
     $groupBoxInfo.Controls.Add($LabelAbout)  
 
     $LabelClusterFilter = New-Object System.Windows.Forms.Label
@@ -4155,6 +4374,12 @@ function addToPgroup{
     $LabeliSCSI.Size = New-Object System.Drawing.Size(180, 50)
     $LabeliSCSI.Text = "Creates Software iSCSI Adapter (if needed) adds FlashArray iSCSI targets with best practices (delayedAck and LoginTimeout):"
     $groupBoxiSCSI.Controls.Add($LabeliSCSI)
+
+    $LabelChooseHost = New-Object System.Windows.Forms.Label
+    $LabelChooseHost.Location = New-Object System.Drawing.Point(10, 70)
+    $LabelChooseHost.Size = New-Object System.Drawing.Size(180, 20)
+    $LabelChooseHost.Text = "Choose an ESXi host:"
+    $groupBoxAddHost.Controls.Add($LabelChooseHost)
 
     $LabSATP = New-Object System.Windows.Forms.Label
     $LabSATP.Location = New-Object System.Drawing.Point(10, 15)
@@ -4377,6 +4602,15 @@ function addToPgroup{
     $buttonCreateHostGroup.Width=120
     $buttonCreateHostGroup.Enabled = $false #Disabled by default
     $groupBoxHGroup.Controls.Add($buttonCreateHostGroup) 
+
+    $buttonAddHosts = New-Object System.Windows.Forms.Button
+    $buttonAddHosts.add_click({addHost})
+    $buttonAddHosts.Text = "Add Host"
+    $buttonAddHosts.Top=131
+    $buttonAddHosts.Left=35
+    $buttonAddHosts.Width=120
+    $buttonAddHosts.Enabled = $false #Disabled by default
+    $groupBoxAddHost.Controls.Add($buttonAddHosts) 
 
     $buttonConfigureiSCSI = New-Object System.Windows.Forms.Button
     $buttonConfigureiSCSI.add_click({configureiSCSI})
@@ -4733,6 +4967,14 @@ function addToPgroup{
     $HostFlashArrayDropDownBox.add_SelectedIndexChanged({clusterConfigSelectionChanged})
     $groupBoxChooseHost.Controls.Add($HostFlashArrayDropDownBox)
 
+    $AddHostDropDownBox = New-Object System.Windows.Forms.ComboBox
+    $AddHostDropDownBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList #Disable user input in ComboBox
+    $AddHostDropDownBox.Location = New-Object System.Drawing.Size(10,90)
+    $AddHostDropDownBox.Size = New-Object System.Drawing.Size(180,20) 
+    $AddHostDropDownBox.DropDownHeight = 200
+    $AddHostDropDownBox.Enabled=$false
+    $groupBoxAddHost.Controls.Add($AddHostDropDownBox)
+
     ######################## Pgroup Drop Downs
 
     $PgroupFADropDownBox = New-Object System.Windows.Forms.ComboBox
@@ -4795,7 +5037,6 @@ function addToPgroup{
     $main_form.Add_Shown({$main_form.Activate()})
     [void] $main_form.ShowDialog()
 
-   
 
 
 
