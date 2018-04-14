@@ -1,20 +1,10 @@
-﻿#Enter the following required parameters. Log folder directory is just and example, change as needed.
-#Put all entries inside the quotes:
-#**********************************
-$vcenter = ""
-$vcuser = ""
-$vcpass = ""
-$logfolder = "C:\folder\folder\etc\"
-#**********************************
-
-<#
+﻿<#
 Optional parameters. Keep these values at default unless necessary and understood
 For a different IO Operations limit beside the Pure Storage recommended value of 1, change $iopsvalue to another integer value 1-1000. 
 To skip changing host-wide settings for XCOPY Transfer Size and In-Guest UNMAP change $hostwidesettings to $false
 For a different minimum path count, change from 4 to another integer. 1-32 (1 is HIGHLY discouraged)
 #>
 $iopsvalue = 1
-$hostwidesettings = $true
 $minpaths = 4
 
 
@@ -37,8 +27,8 @@ All information logged to a file.
 This can be run directly from PowerCLI or from a standard PowerShell prompt. PowerCLI must be installed on the local host regardless.
 
 Supports:
--FlashArray 400 Series and //m
--vCenter 5.0 and later
+-FlashArray 400 Series, //m and //x
+-vCenter 5.5 and later
 -PowerCLI 6.3 R1 or later required
 
 
@@ -46,10 +36,17 @@ For info, refer to www.codyhosterman.com
 #>
 
 #Create log folder if non-existent
-If (!(Test-Path -Path $logfolder)) { New-Item -ItemType Directory -Path $logfolder }
-$logfile = $logfolder + (Get-Date -Format o |ForEach-Object {$_ -Replace ":", "."}) + "checkbestpractices.txt"
-write-host "Checking Pure Storage FlashArray Best Practices for VMware on the ESXi hosts in this vCenter. "
-write-host "Script log information can be found at $logfile"
+write-host "Please choose a directory to store the script log"
+function ChooseFolder([string]$Message, [string]$InitialDirectory)
+{
+    $app = New-Object -ComObject Shell.Application
+    $folder = $app.BrowseForFolder(0, $Message, 0, $InitialDirectory)
+    $selectedDirectory = $folder.Self.Path 
+    return $selectedDirectory
+}
+$logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
+$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "checkbestpractices.txt"
+write-host "Script result log can be found at $logfile" -ForegroundColor Green
 
 add-content $logfile '             __________________________'
 add-content $logfile '            /++++++++++++++++++++++++++\'           
@@ -72,30 +69,70 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v3.1'
+add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v4.0 (APRIL-2018)'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
-. "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" |out-null
+#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
+#Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
+
+if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
+    if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+      . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    elseif (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    {
+        . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+    }
+    elseif (!(get-Module -Name VMware.PowerCLI -ListAvailable))
+    {
+        if (get-Module -name PowerShellGet -ListAvailable)
+        {
+            try
+            {
+                Get-PackageProvider -name NuGet -ListAvailable -ErrorAction stop
+            }
+            catch
+            {
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -Confirm:$false
+            }
+            Install-Module -Name VMware.PowerCLI –Scope CurrentUser -Confirm:$false -Force
+        }
+        else
+        {
+            write-host ("PowerCLI could not automatically be installed because PowerShellGet is not present. Please install PowerShellGet or PowerCLI") -BackgroundColor Red
+            write-host "PowerShellGet can be found here https://www.microsoft.com/en-us/download/details.aspx?id=51451 or is included with PowerShell version 5"
+            write-host "Terminating Script" -BackgroundColor Red
+            return
+        }
+    }
+    if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable)))
+    {
+        write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
+        write-host "Terminating Script" -BackgroundColor Red
+        return
+    }
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
-
 if ((Get-PowerCLIVersion).build -lt 3737840)
 {
     write-host "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)" -BackgroundColor Red
     write-host "Found the following build number:"
     write-host (Get-PowerCLIVersion).build
     write-host "Terminating Script" -BackgroundColor Red
+    write-host "Get it here: https://my.vmware.com/group/vmware/get-download?downloadGroup=PCLI630R1"
     add-content $logfile "This version of PowerCLI is too old, version 6.3 Release 1 or later is required (Build 3737840)"
     add-content $logfile "Found the following build number:"
     add-content $logfile (Get-PowerCLIVersion).build
     add-content $logfile "Terminating Script"
+    add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
     return
 }
-
+$vcenter = read-host "Please enter a vCenter IP or FQDN"
+$Creds = $Host.ui.PromptForCredential("vCenter Credentials", "Please enter your vCenter username and password.", "","")
 try
 {
-    connect-viserver -Server $vcenter -username $vcuser -password $vcpass -ErrorAction Stop |out-null
+    connect-viserver -Server $vcenter -Credential $Creds -ErrorAction Stop |out-null
 }
 catch
 {
@@ -109,10 +146,11 @@ catch
 }
 
 write-host "No further information is printed to the screen."
-add-content $logfile ('Connected to vCenter at ' + $vcenter)
+add-content $logfile "Connected to vCenter at $($vcenter)"
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 $hosts= get-vmhost
+$errorHosts = @()
 
 add-content $logfile "Iterating through all ESXi hosts..."
 $hosts | out-string | add-content $logfile
@@ -120,88 +158,67 @@ $hosts | out-string | add-content $logfile
 #Iterating through each host in the vCenter
 foreach ($esx in $hosts) 
 {
+    $esxError = $false
     $esxcli=get-esxcli -VMHost $esx -v2
     add-content $logfile "***********************************************************************************************"
     add-content $logfile "**********************************NEXT ESXi HOST***********************************************"
     add-content $logfile "-----------------------------------------------------------------------------------------------"
-    add-content $logfile "Working on the following ESXi host:"
-    add-content $logfile $esx.NetworkInfo.hostname
-    add-content $logfile $esx.Version
+    add-content $logfile "Working on the following ESXi host: $($esx.NetworkInfo.hostname), version $($esx.Version)"
     add-content $logfile "-----------------------------------------------------------------------------------------------"
-    if ($hostwidesettings -eq $true)
+    add-content $logfile "Checking Disk.DiskMaxIoSize setting."
+    add-content $logfile "-------------------------------------------------------"
+    $maxiosize = $esx |get-advancedsetting -Name Disk.DiskMaxIOSize
+    if ($maxiosize.value -gt 4096)
     {
-        add-content $logfile "Checking host-wide settings for VAAI and In-Guest UNMAP"
-        add-content $logfile "-------------------------------------------------------"
-        $xcopy = $esx | Get-AdvancedSetting -Name DataMover.HardwareAcceleratedMove
-        if ($xcopy.value -eq 0)
-        {
-            add-content $logfile "[****NEEDS ATTENTION****]The VAAI XCOPY (Full Copy) feature is not enabled on this host, it should be enabled."
-        }
-        else 
-        {
-            add-content $logfile "The VAAI XCOPY (Full Copy) feature is correctly enabled on this host."
-        }
-        $writesame = $esx | Get-AdvancedSetting -Name DataMover.HardwareAcceleratedInit
-        if ($writesame.value -eq 0)
-        {
-            add-content $logfile "[****NEEDS ATTENTION****]The VAAI WRITESAME (Block Zero) feature is not enabled on this host, it should be enabled."
-        }
-        else 
-        {
-            add-content $logfile "The VAAI WRITESAME (Block Zero) feature is correctly enabled on this host."
-        }
-        $atslocking = $esx | Get-AdvancedSetting -Name VMFS3.HardwareAcceleratedLocking
-        if ($atslocking.value -eq 0)
-        {
-            add-content $logfile "[****NEEDS ATTENTION****]The VAAI ATOMIC TEST & SET (Assisted Locking) feature is not enabled on this host, it should be enabled."
-        }
-        else 
-        {
-            add-content $logfile "The VAAI ATOMIC TEST & SET (Assisted Locking) feature is correctly enabled on this host."
-        }
-        if (($datastore -ne $null) -and (($esx.version -like ("5.5.*")) -or ($esx.version -like ("6.*"))))
-        { 
-            $atsheartbeat = $esx | Get-AdvancedSetting -Name VMFS3.useATSForHBOnVMFS5
-            if ($atsheartbeat.value -eq 0)
-            {
-                add-content $logfile "[****NEEDS ATTENTION****]Datastore Heartbeating is not configured to use the VAAI ATOMIC TEST & SET (Assisted Locking) feature, it should be enabled."
-            }
-            else 
-            {
-                add-content $logfile "Datastore Heartbeating is correctly configured to use the VAAI ATOMIC TEST & SET (Assisted Locking) feature."
-            }
-        }
-        $xfersize = $esx | Get-AdvancedSetting -Name DataMover.MaxHWTransferSize
-        if ($xfersize.value -ne 16384)
-        {
-            add-content $logfile "[****NEEDS ATTENTION****]The VAAI XCOPY MaxHWTransferSize for this host is incorrect:"
-            add-content $logfile $xfersize.value
-            add-content $logfile "This should be set to 16386 (16 MB)."
-        }
-        else 
-        {
-            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is correct at 16 MB."
-        }
-        if ($esx.Version -like "6.0.*")
-        { 
-            $enableblockdelete = ($esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete).Value
-            if ($enableblockdelete.Value -eq 0)
-            {
-                add-content $logfile "[****NEEDS ATTENTION****]EnableBlockDelete is currently disabled but is recommended to be enabled."
-            }
-            else 
-            {
-                add-content $logfile "EnableBlockDelete for this host is correctly enabled."
-            }
-        }
-        else
-        {
-            add-content $logfile "The current host is not version 6.0. Skipping EnableBlockDelete check as it is not applicable at this version."
-        }
+        $esxError = $true
+        add-content $logfile "[****NEEDS ATTENTION****]The Disk.DiskMaxIOSize setting is set too high--currently set at $($maxiosize.value) KB "
+        add-content $logfile "If your environment uses UEFI boot for VMs they will not boot unless this is set to 4096 (4 MB) or lower."
+        add-content $logfile "https://docs.vmware.com/en/VMware-vSphere/6.5/com.vmware.vsphere.vm_admin.doc/GUID-898217D4-689D-4EB5-866C-888353FE241C.html"
+        add-content $logfile "This can be safely ignored if you only use BIOS boot for VMs"
     }
     else
     {
-        add-content $logfile "Not checking host wide settings for VAAI and In-Guest UNMAP due to in-script override"
+        add-content $logfile "Disk.DiskMaxIOSize is set properly."
+    }
+    add-content $logfile ""
+    add-content $logfile "-------------------------------------------------------"
+    add-content $logfile "Checking host-wide settings for VAAI."
+    add-content $logfile "-------------------------------------------------------"
+    $vaaiIssues = $false
+    $xcopy = $esx | Get-AdvancedSetting -Name DataMover.HardwareAcceleratedMove
+    if ($xcopy.value -eq 0)
+    {
+        $esxError = $true
+        add-content $logfile "[****NEEDS ATTENTION****]The VAAI XCOPY (Full Copy) feature is not enabled on this host, it should be enabled."
+        $vaaiIssues = $true
+    }
+    $writesame = $esx | Get-AdvancedSetting -Name DataMover.HardwareAcceleratedInit
+    if ($writesame.value -eq 0)
+    {
+        $esxError = $true
+        add-content $logfile "[****NEEDS ATTENTION****]The VAAI WRITESAME (Block Zero) feature is not enabled on this host, it should be enabled."
+        $vaaiIssues = $true
+    }
+    $atslocking = $esx | Get-AdvancedSetting -Name VMFS3.HardwareAcceleratedLocking
+    if ($atslocking.value -eq 0)
+    {
+        $esxError = $true
+        add-content $logfile "[****NEEDS ATTENTION****]The VAAI ATOMIC TEST & SET (Assisted Locking) feature is not enabled on this host, it should be enabled."
+        $vaaiIssues = $true
+    }
+    if (($datastore -ne $null) -and (($esx.version -like ("5.5.*")) -or ($esx.version -like ("6.*"))))
+    { 
+        $atsheartbeat = $esx | Get-AdvancedSetting -Name VMFS3.useATSForHBOnVMFS5
+        if ($atsheartbeat.value -eq 0)
+        {
+            $esxError = $true
+            add-content $logfile "[****NEEDS ATTENTION****]Datastore Heartbeating is not configured to use the VAAI ATOMIC TEST & SET (Assisted Locking) feature, it should be enabled."
+            $vaaiIssues = $true
+        }
+    }
+    if ($vaaiIssues -eq $false)
+    {
+        add-content $logfile "No issues with VAAI configuration found on this host"
     }
     add-content $logfile ""
     add-content $logfile ""
@@ -258,6 +275,7 @@ foreach ($esx in $hosts)
     }
     if ($iscsitofix.count -ge 1)
     {
+        $esxError = $true
         add-content $logfile ("[****NEEDS ATTENTION****]A total of " + ($iscsitofix | select-object -unique).count + " FlashArray iSCSI targets have one or more errors.")
         add-content $logfile "Each target listed has an issue with at least one of the following configurations:"
         add-content $logfile ("  --The target does not have DelayedAck disabled")
@@ -288,7 +306,7 @@ foreach ($esx in $hosts)
         {
             foreach ($iSCSInic in $iSCSInics)
             {
-                if (($iSCSInic.CompliantStatus -eq "compliant") -and ($iSCSInic.PathStatus -eq "active"))
+                if (($iSCSInic.CompliantStatus -eq "compliant") -and (($iSCSInic.PathStatus -eq "active") -or ($iSCSInic.PathStatus -eq "unused")))
                 {
                     $goodnics += $iSCSInic
                 }
@@ -302,6 +320,7 @@ foreach ($esx in $hosts)
             {
                 add-content $logfile ("Found " + $goodnics.Count + " COMPLIANT AND ACTIVE NICs out of a total of " + $iSCSInics.Count + "NICs bound to this adapter")
                 $nicstofix = @()
+                $esxError = $true
                 add-content $logfile "[****NEEDS ATTENTION****]There are less than two COMPLIANT and ACTIVE NICs bound to the iSCSI software adapter. It is recommended to have two or more."
                 if ($badnics.count -ge 1)
                 {
@@ -321,8 +340,8 @@ foreach ($esx in $hosts)
                                         @{Label = 'PathStatus'; Expression = {$_.PathStatus}; Alignment = 'Left'}
                                         @{Label = 'vSwitch'; Expression = {$_.vSwitch}; Alignment = 'Left'}
                                     )
-                    add-content $logfile "The following are NICs that are bound to the iSCSI Adapter but are either NON-COMPLIANT, INACTIVE or both"
-                    $nicstofix | ft -property $tableofbadnics -autosize| out-string | add-content $logfile
+                    add-content $logfile "The following are NICs that are bound to the iSCSI Adapter but are either NON-COMPLIANT, INACTIVE or both. Or there is less than 2."
+                    $nicstofix | Format-Table -property $tableofbadnics -autosize| out-string | add-content $logfile
                 }
             }
             else 
@@ -332,6 +351,7 @@ foreach ($esx in $hosts)
         }
         else
         {
+            $esxError = $true
             add-content $logfile "[****NEEDS ATTENTION****]There are zero NICs bound to the software iSCSI adapter. This is strongly discouraged. Please bind two or more NICs"
         }
     }
@@ -350,47 +370,43 @@ foreach ($esx in $hosts)
     if ($rules.Count -ge 1)
     {
         add-content $logfile ("Found " + $rules.Count + " existing Pure Storage SATP rule(s)")
+        if ($rules.Count -gt 1)
+        {
+            $esxError = $true
+            add-content $logfile "[****NEEDS ATTENTION****]There is more than one rule. The last rule found will be the one in use. Ensure this is intentional."
+        }
         foreach ($rule in $rules)
         {
             add-content $logfile "-----------------------------------------------"
+            add-content $logfile ""
             add-content $logfile "Checking the following existing rule:"
-            $rule | out-string | add-content $logfile
+            ($rule | out-string).TrimEnd() | add-content $logfile
+            add-content $logfile ""
             $issuecount = 0
-            if ($rule.DefaultPSP -eq "VMW_PSP_RR") 
+            if ($rule.DefaultPSP -ne "VMW_PSP_RR") 
             {
-                add-content $logfile "This Pure Storage FlashArray rule is configured with the correct Path Selection Policy."
-            }
-            else 
-            {
-                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct Path Selection Policy:"
-                add-content $logfile $rule.DefaultPSP
+                $esxError = $true
+                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct Path Selection Policy: $($rule.DefaultPSP)"
                 add-content $logfile "The rule should be configured to Round Robin (VMW_PSP_RR)"
                 $issuecount = 1
             }
-            if ($rule.PSPOptions -eq $iopsoption) 
+            if ($rule.PSPOptions -ne $iopsoption) 
             {
-                add-content $logfile "This Pure Storage FlashArray rule is configured with the correct IO Operations Limit."
-            }
-            else 
-            {
-                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct IO Operations Limit:"
-                add-content $logfile $rule.PSPOptions
-                add-content $logfile "The rule should be configured to an IO Operations Limit of $iopsvalue"
+                $esxError = $true
+                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct IO Operations Limit: $($rule.PSPOptions)"
+                add-content $logfile "The rule should be configured to an IO Operations Limit of $($iopsvalue)"
                 $issuecount = $issuecount + 1
             } 
-            if ($rule.Model -eq "FlashArray") 
+            if ($rule.Model -ne "FlashArray") 
             {
-                add-content $logfile "This Pure Storage FlashArray rule is configured with the correct model."
-            }
-            else 
-            {
-                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct model:"
-                add-content $logfile $rule.Model
+                $esxError = $true
+                add-content $logfile "[****NEEDS ATTENTION****]This Pure Storage FlashArray rule is NOT configured with the correct model: $($rule.Model)"
                 add-content $logfile "The rule should be configured with the model of FlashArray"
                 $issuecount = $issuecount + 1
             } 
             if ($issuecount -ge 1)
             {
+                $esxError = $true
                 add-content $logfile "[****NEEDS ATTENTION****]This rule is incorrect and should be removed."
                 add-content $logfile "-----------------------------------------------"
             }
@@ -403,12 +419,9 @@ foreach ($esx in $hosts)
         }
     }
     if ($correctrule -eq 0)
-    {  
+    { 
+        $esxError = $true 
         add-content $logfile "[****NEEDS ATTENTION****]No correct SATP rule for the Pure Storage FlashArray is found. You should create a new rule to set Round Robin and an IO Operations Limit of $iopsvalue"
-    }
-    else 
-    {
-        add-content $logfile "A correct SATP rule for the FlashArray exists. No need to create a new one on this host."
     }
     $devices = $esx |Get-ScsiLun -CanonicalName "naa.624a9370*"
     if ($devices.count -ge 1) 
@@ -497,6 +510,7 @@ foreach ($esx in $hosts)
         }
         if ($devstofix.count -ge 1)
         {
+            $esxError = $true
             add-content $logfile ("[****NEEDS ATTENTION****]A total of " + $devstofix.count + " FlashArray devices have one or more errors.")
             add-content $logfile ""
             add-content $logfile "Each device listed has an issue with at least one of the following configurations:"
@@ -514,7 +528,7 @@ foreach ($esx in $hosts)
                                 @{Label = 'IOPSValue'; Expression = {$_.IOPSValue}; Alignment = 'Left'}
                                 @{Label = 'ATSMode'; Expression = {$_.ATSMode}; Alignment = 'Left'}
                             )
-            $devstofix | ft -property $tableofdevs -autosize| out-string | add-content $logfile
+            ($devstofix | ft -property $tableofdevs -autosize| out-string).TrimEnd() | add-content $logfile
         }
         else
         {
@@ -526,11 +540,22 @@ foreach ($esx in $hosts)
         add-content $logfile "No existing Pure Storage volumes found on this host."
     }
     add-content $logfile ""
-    add-content $logfile "Done with the following ESXi host:"
-    add-content $logfile $esx.NetworkInfo.hostname
+    add-content $logfile "Done with the following ESXi host: $($esx.NetworkInfo.hostname)"
     add-content $logfile "***********************************************************************************************"
     add-content $logfile "**********************************DONE WITH ESXi HOST******************************************"
     add-content $logfile "***********************************************************************************************"
+    add-content $logfile ""
+    if ($esxError -eq $true)
+    {
+        $errorHosts += $esx
+    }
+}
+if ($errorHosts.count -gt 0)
+{
+    $tempText = Get-Content $logfile
+    "The following hosts have errors. Search for ****NEEDS ATTENTION**** for details" |Out-File $logfile
+    add-content $logfile $errorHosts
+    add-content $logfile $tempText
     add-content $logfile ""
     add-content $logfile ""
 }
