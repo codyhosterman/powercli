@@ -4,7 +4,7 @@ For a different IO Operations limit beside the Pure Storage recommended value of
 To skip changing host-wide settings for XCOPY Transfer Size and In-Guest UNMAP change $hostwidesettings to $false
 #>
 $iopsvalue = 1
-$hostwidesettings = $true
+$diskMaxIOSize = $false
 
 <#
 *******Disclaimer:******************************************************
@@ -29,7 +29,7 @@ All change operations are logged to a file.
 This can be run directly from PowerCLI or from a standard PowerShell prompt. PowerCLI must be installed on the local host regardless.
 
 Supports:
--FlashArray 400 Series and //m
+-FlashArray 400 Series, //m, and //x
 -vCenter 5.5 and later
 -PowerCLI 6.3 R1 or later required
 
@@ -44,11 +44,10 @@ function ChooseFolder([string]$Message, [string]$InitialDirectory)
     return $selectedDirectory
 }
 $logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
-$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "setbestpractices.txt"
-write-host "Script result log can be found at $logfile" -ForegroundColor Green
+$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "setbestpractices.log"
 
 write-host "Checking and setting Pure Storage FlashArray Best Practices for VMware on the ESXi hosts in this vCenter."
-write-host "Script log information can be found at $logfile"
+write-host ""
 
 add-content $logfile '             __________________________'
 add-content $logfile '            /++++++++++++++++++++++++++\'           
@@ -71,7 +70,7 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage  FlashArray VMware ESXi Best Practices Script v4.0'
+add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Script v 4.5 (APRIL-2018)'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
 
@@ -133,9 +132,98 @@ catch
 write-host ""
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-$hosts= get-vmhost
+write-host "The default behavior is to check and fix every host in vCenter."
+$clusterChoice = read-host "Would you prefer to limit this to hosts in a specific cluster? (y/n)"
 
+while (($clusterChoice -ine "y") -and ($clusterChoice -ine "n"))
+{
+    write-host "Invalid entry, please enter y or n"
+    $clusterChoice = "Would you like to limit this check to a single cluster? (y/n)"
+}
+if ($clusterChoice -ieq "y")
+{
+    write-host "Please choose the cluster in the dialog box that popped-up." -ForegroundColor Yellow
+    [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+    [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") 
+
+    #create form to choose recovery cluster
+    $ClusterForm = New-Object System.Windows.Forms.Form
+    $ClusterForm.width = 300
+    $ClusterForm.height = 100
+    $ClusterForm.Text = ”Choose a Cluster”
+
+    $DropDown = new-object System.Windows.Forms.ComboBox
+    $DropDown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $DropDown.Location = new-object System.Drawing.Size(10,10)
+    $DropDown.Size = new-object System.Drawing.Size(250,30)
+    $clusters = get-cluster
+    if ($clusters.count -lt 1)
+    {
+        add-content $logfile "Terminating Script. No VMware cluster(s) found."  
+        write-host "No VMware cluster(s) found. Terminating Script" -BackgroundColor Red
+        disconnectServers
+        return
+    }
+    ForEach ($cluster in $clusters) {
+        $DropDown.Items.Add($cluster.Name) |out-null
+    }
+    $ClusterForm.Controls.Add($DropDown)
+
+    #okay button
+    $OkClusterButton = new-object System.Windows.Forms.Button
+    $OkClusterButton.Location = new-object System.Drawing.Size(60,40)
+    $OkClusterButton.Size = new-object System.Drawing.Size(70,20)
+    $OkClusterButton.Text = "OK"
+    $OkClusterButton.Add_Click({
+        $script:clusterName = $DropDown.SelectedItem.ToString()
+        $ClusterForm.Close()
+        })
+    $ClusterForm.Controls.Add($OkClusterButton)
+
+    #cancel button
+    $CancelClusterButton = new-object System.Windows.Forms.Button
+    $CancelClusterButton.Location = new-object System.Drawing.Size(150,40)
+    $CancelClusterButton.Size = new-object System.Drawing.Size(70,20)
+    $CancelClusterButton.Text = "Cancel"
+    $CancelClusterButton.Add_Click({
+        $script:endscript = $true
+        $ClusterForm.Close()
+        })
+    $ClusterForm.Controls.Add($CancelClusterButton)
+    $DropDown.SelectedIndex = 0
+    $ClusterForm.Add_Shown({$ClusterForm.Activate()})
+    [void] $ClusterForm.ShowDialog()
+
+    add-content $logfile "Selected cluster is $($clusterName)"
+    add-content $logfile ""
+    $cluster = get-cluster -Name $clusterName
+    $hosts= $cluster |get-vmhost
+    write-host ""
+}
+else 
+{
+    write-host ""
+    $hosts= get-vmhost
+}
+
+write-host "If you are using vSphere Replication or intend to use UEFI boot for your VMs, Disk.DiskMaxIOSize must be set to 4096 KB from 32768."
+$diskIOChoice = read-host "Would you like to make this host-wide change? (y/n)"
+
+while (($diskIOChoice -ine "y") -and ($diskIOChoice -ine "n"))
+{
+    write-host "Invalid entry, please enter y or n"
+    $diskIOChoice = read-host "Would you like to make this host-wide change? (y/n)"
+}
+if ($diskIOChoice -ieq "y")
+{
+    $diskMaxIOSize = $true
+}
+Write-Host ""
+write-host "Script log information can be found at $logfile" -ForegroundColor green
+Write-Host ""
+write-host "Executing..."
 add-content $logfile "Iterating through all ESXi hosts..."
+$hosts | out-string | add-content $logfile
 
 #Iterating through each host in the vCenter
 foreach ($esx in $hosts) 
@@ -143,49 +231,28 @@ foreach ($esx in $hosts)
     $esxcli=get-esxcli -VMHost $esx -v2
     add-content $logfile "-----------------------------------------------------------------------------------------------"
     add-content $logfile "-----------------------------------------------------------------------------------------------"
-    add-content $logfile "Working on the following ESXi host:"
-    add-content $logfile $esx.NetworkInfo.hostname
+    add-content $logfile "Working on the following ESXi host: $($esx.NetworkInfo.hostname)"
     add-content $logfile "-----------------------------------------------"
-    if ($hostwidesettings -eq $true)
+    if ($diskMaxIOSize -eq $true)
     {
-        add-content $logfile "Checking host-wide setting for XCOPY and In-Guest UNMAP"
-        $xfersize = $esx | Get-AdvancedSetting -Name DataMover.MaxHWTransferSize
-        if ($xfersize.value -ne 16384)
+        add-content $logfile "Checking Disk.DiskMaxIoSize setting."
+        add-content $logfile "-------------------------------------------------------"
+        $maxiosize = $esx |get-advancedsetting -Name Disk.DiskMaxIOSize
+        if ($maxiosize.value -gt 4096)
         {
-            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is incorrect:"
-            add-content $logfile $xfersize.value
-            add-content $logfile "This should be set to 16386 (16 MB). Changing to 16384..."
-            $xfersize |Set-AdvancedSetting -Value 16384 -Confirm:$false |out-null
-            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is now 16 MB"
-        }
-        else 
-        {
-            add-content $logfile "The VAAI XCOPY MaxHWTransferSize for this host is correct at 16 MB and will not be altered."
-        }
-        if ($esx.Version -like "6.*")
-        { 
-            $enableblockdelete = $esx | Get-AdvancedSetting -Name VMFS3.EnableBlockDelete
-            if ($enableblockdelete.Value -eq 0)
-            {
-                add-content $logfile "EnableBlockDelete is currently disabled. Enabling..."
-                $enableblockdelete |Set-AdvancedSetting -Value 1 -Confirm:$false |out-null
-                add-content $logfile "EnableBlockDelete has been set to enabled."
-            }
-            else 
-            {
-                add-content $logfile "EnableBlockDelete for this host is correctly enabled and will not be altered."
-            }
+            add-content $logfile "The Disk.DiskMaxIOSize setting is set too high--currently set at $($maxiosize.value) KB "
+            add-content $logfile "If your environment uses UEFI boot for VMs they will not boot unless this is set to 4096 (4 MB) or lower."
+            add-content $logfile "https://docs.vmware.com/en/VMware-vSphere/6.5/com.vmware.vsphere.vm_admin.doc/GUID-898217D4-689D-4EB5-866C-888353FE241C.html"
+            add-content $logfile "Setting to 4 MB..."
+            $maxiosize |Set-AdvancedSetting -Value 4096 -Confirm:$false |out-null
         }
         else
         {
-            add-content $logfile "The current host is not version 6.x. Skipping EnableBlockDelete check."
+            add-content $logfile "Disk.DiskMaxIOSize is set properly."
         }
-    }
-    else
-    {
-        add-content $logfile "Not checking host wide settings for XCOPY and In-Guest UNMAP due to in-script override"
-    }
-    add-content $logfile "-----------------------------------------------"
+        add-content $logfile ""
+        add-content $logfile "-------------------------------------------------------"
+    }   
     $rules = $esxcli.storage.nmp.satp.rule.list.invoke() |where-object {$_.Vendor -eq "PURE"}
     $correctrule = 0
     $iopsoption = "iops=" + $iopsvalue

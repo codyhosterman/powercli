@@ -36,7 +36,9 @@ For info, refer to www.codyhosterman.com
 #>
 
 #Create log folder if non-existent
+write-host ""
 write-host "Please choose a directory to store the script log"
+write-host ""
 function ChooseFolder([string]$Message, [string]$InitialDirectory)
 {
     $app = New-Object -ComObject Shell.Application
@@ -45,8 +47,7 @@ function ChooseFolder([string]$Message, [string]$InitialDirectory)
     return $selectedDirectory
 }
 $logfolder = ChooseFolder -Message "Please select a log file directory" -InitialDirectory 'MyComputer' 
-$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "checkbestpractices.txt"
-write-host "Script result log can be found at $logfile" -ForegroundColor Green
+$logfile = $logfolder + '\' + (Get-Date -Format o |ForEach-Object {$_ -Replace ':', '.'}) + "checkbestpractices.log"
 
 add-content $logfile '             __________________________'
 add-content $logfile '            /++++++++++++++++++++++++++\'           
@@ -69,10 +70,10 @@ add-content $logfile '         \++++++++++++\'
 add-content $logfile '          \++++++++++++\'                          
 add-content $logfile '           \++++++++++++\'                         
 add-content $logfile '            \------------\'
-add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v4.0 (APRIL-2018)'
+add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Checker Script v4.5 (APRIL-2018)'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
+#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI cannot be installed
 #Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
 
 if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
@@ -128,6 +129,7 @@ if ((Get-PowerCLIVersion).build -lt 3737840)
     add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
     return
 }
+#connect to vCenter
 $vcenter = read-host "Please enter a vCenter IP or FQDN"
 $Creds = $Host.ui.PromptForCredential("vCenter Credentials", "Please enter your vCenter username and password.", "","")
 try
@@ -144,14 +146,88 @@ catch
     add-content $logfile "Terminating Script"
     return
 }
-
-write-host "No further information is printed to the screen."
+write-host ""
+write-host "Script result log can be found at $logfile" -ForegroundColor Green
+write-host ""
 add-content $logfile "Connected to vCenter at $($vcenter)"
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
-$hosts= get-vmhost
-$errorHosts = @()
+write-host "The default behavior is to check every host in vCenter."
+$clusterChoice = read-host "Would you prefer to limit this to hosts in a specific cluster? (y/n)"
 
+while (($clusterChoice -ine "y") -and ($clusterChoice -ine "n"))
+{
+    write-host "Invalid entry, please enter y or n"
+    $clusterChoice = "Would you like to limit this check to a single cluster? (y/n)"
+}
+if ($clusterChoice -ieq "y")
+{
+    write-host "Please choose the cluster in the dialog box that popped-up." -ForegroundColor Yellow
+    [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+    [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") 
+
+    #create form to choose recovery cluster
+    $ClusterForm = New-Object System.Windows.Forms.Form
+    $ClusterForm.width = 300
+    $ClusterForm.height = 100
+    $ClusterForm.Text = ”Choose a Cluster”
+
+    $DropDown = new-object System.Windows.Forms.ComboBox
+    $DropDown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $DropDown.Location = new-object System.Drawing.Size(10,10)
+    $DropDown.Size = new-object System.Drawing.Size(250,30)
+    $clusters = get-cluster
+    if ($clusters.count -lt 1)
+    {
+        add-content $logfile "Terminating Script. No VMware cluster(s) found."  
+        write-host "No VMware cluster(s) found. Terminating Script" -BackgroundColor Red
+        disconnectServers
+        return
+    }
+    ForEach ($cluster in $clusters) {
+        $DropDown.Items.Add($cluster.Name) |out-null
+    }
+    $ClusterForm.Controls.Add($DropDown)
+
+    #okay button
+    $OkClusterButton = new-object System.Windows.Forms.Button
+    $OkClusterButton.Location = new-object System.Drawing.Size(60,40)
+    $OkClusterButton.Size = new-object System.Drawing.Size(70,20)
+    $OkClusterButton.Text = "OK"
+    $OkClusterButton.Add_Click({
+        $script:clusterName = $DropDown.SelectedItem.ToString()
+        $ClusterForm.Close()
+        })
+    $ClusterForm.Controls.Add($OkClusterButton)
+
+    #cancel button
+    $CancelClusterButton = new-object System.Windows.Forms.Button
+    $CancelClusterButton.Location = new-object System.Drawing.Size(150,40)
+    $CancelClusterButton.Size = new-object System.Drawing.Size(70,20)
+    $CancelClusterButton.Text = "Cancel"
+    $CancelClusterButton.Add_Click({
+        $script:endscript = $true
+        $ClusterForm.Close()
+        })
+    $ClusterForm.Controls.Add($CancelClusterButton)
+    $DropDown.SelectedIndex = 0
+    $ClusterForm.Add_Shown({$ClusterForm.Activate()})
+    [void] $ClusterForm.ShowDialog()
+
+    add-content $logfile "Selected cluster is $($clusterName)"
+    add-content $logfile ""
+    $cluster = get-cluster -Name $clusterName
+    $hosts= $cluster |get-vmhost
+    write-host ""
+}
+else 
+{
+    write-host ""
+    $hosts= get-vmhost
+}
+
+$errorHosts = @()
+write-host "Executing..."
 add-content $logfile "Iterating through all ESXi hosts..."
 $hosts | out-string | add-content $logfile
 
@@ -432,8 +508,8 @@ foreach ($esx in $hosts)
         add-content $logfile "Checking for existing Pure Storage FlashArray devices and their multipathing configuration."
         add-content $logfile "-------------------------------------------------------------------------------------------------------------------------------------------"
         add-content $logfile ("Found " + $devices.count + " existing Pure Storage volumes on this host.")
-        add-content $logfile "Checking their multipathing configuration now. Only listing devices with issues."
-        add-content $logfile "Checking for Path Selection Policy, Path Count and IO Operations Limit"
+        add-content $logfile "Checking their configuration now. Only listing devices with issues."
+        add-content $logfile "Checking for Path Selection Policy, Path Count, IO Operations Limit, and AutoUnmap Settings"
         add-content $logfile ""
         $devstofix = @()
         foreach ($device in $devices)
@@ -443,6 +519,7 @@ foreach ($esx in $hosts)
             $devpaths = $false
             $devATS = $false
             $datastore = $null
+            $autoUnmap = $false
             if ($device.MultipathPolicy -ne "RoundRobin")
             {
                 $devpsp = $true
@@ -495,15 +572,37 @@ foreach ($esx in $hosts)
                 {
                     $ATS = $vmfsconfig.LockingMode
                 }
+                if ($datastore.ExtensionData.info.vmfs.version -like "6.*")
+                {
+                    $unmapargs = $esxcli.storage.vmfs.reclaim.config.get.createargs()
+                    $unmapargs.volumelabel = $datastore.name
+                    $unmapresult = $esxcli.storage.vmfs.reclaim.config.get.invoke($unmapargs)
+                    if ($unmapresult.ReclaimPriority -ne "low")
+                    {
+                        $autoUnmap = $true
+                        $autoUnmapPriority = "$($unmapresult.ReclaimPriority)*"
+                    }
+                    elseif ($unmapresult.ReclaimPriority -eq "low")
+                    {
+                        $autoUnmapPriority = "$($unmapresult.ReclaimPriority)"
+                    }
+                }
+                else 
+                {
+                    
+                }
             }
-            if ($deviops -or $devpsp -or $devpaths -or $devATS)
+            if ($deviops -or $devpsp -or $devpaths -or $devATS -or $autoUnmap)
             {
                  $devtofix = new-object psobject -Property @{
                     NAA = $device.CanonicalName
                     PSP = $psp 
                     IOPSValue  = if ($device.MultipathPolicy -eq "RoundRobin"){$iops}else {"N/A"}
                     PathCount  = $paths
+                    DatastoreName = if ($datastore -ne $null) {$datastore.Name}else{"N/A"}
+                    VMFSVersion = if ($datastore -ne $null) {$datastore.ExtensionData.info.vmfs.version}else{"N/A"}
                     ATSMode = if (($datastore -ne $null) -and ($esx.version -like ("6.*"))) {$ATS}else{"N/A"}
+                    AutoUNMAP = if (($datastore -ne $null) -and ($datastore.ExtensionData.info.vmfs.version -like "6.*")) {$autoUnmapPriority}else{"N/A"}
                    }
                 $devstofix += $devtofix
             }
@@ -518,6 +617,7 @@ foreach ($esx in $hosts)
             add-content $logfile ("  --IO Operations Limit (IOPS) is not set to the recommended value (" + $iopsvalue + ")")
             add-content $logfile ("  --The device has less than the minimum recommended logical paths (" + $minpaths + ")")
             add-content $logfile ("  --The VMFS on this device does not have ATSonly mode enabled.")
+            add-content $logfile ("  --The VMFS-6 datastore on this device does not have Automatic UNMAP enabled. It should be set to low.")
             add-content $logfile ""
             add-content $logfile "Settings that need to be fixed are marked with an asterisk (*)"
 
@@ -526,9 +626,12 @@ foreach ($esx in $hosts)
                                 @{Label = 'PSP'; Expression = {$_.PSP}; Alignment = 'Left'}
                                 @{Label = 'PathCount'; Expression = {$_.PathCount}; Alignment = 'Left'}
                                 @{Label = 'IOPSValue'; Expression = {$_.IOPSValue}; Alignment = 'Left'}
+                                @{Label = 'DatastoreName'; Expression = {$_.DatastoreName}; Alignment = 'Left'}
+                                @{Label = 'VMFSVersion'; Expression = {$_.VMFSVersion}; Alignment = 'Left'}
                                 @{Label = 'ATSMode'; Expression = {$_.ATSMode}; Alignment = 'Left'}
+                                @{Label = 'AutoUNMAP'; Expression = {$_.AutoUNMAP}; Alignment = 'Left'}
                             )
-            ($devstofix | ft -property $tableofdevs -autosize| out-string).TrimEnd() | add-content $logfile
+            ($devstofix | Format-Table -property $tableofdevs -autosize| out-string).TrimEnd() | add-content $logfile
         }
         else
         {
@@ -561,3 +664,18 @@ if ($errorHosts.count -gt 0)
 }
  disconnect-viserver -Server $vcenter -confirm:$false
  add-content $logfile "Disconnected vCenter connection"
+ write-host "Check complete."
+ write-host ""
+ if ($errorHosts.count -gt 0)
+ {
+    Write-Host "Errors on the following hosts were found:"
+    write-host "==========================================="
+    Write-Host $errorHosts
+ }
+ else 
+ {
+    write-host "No errors were found."    
+ }
+ write-host ""
+ write-host "Refer to log file for detailed results." -ForegroundColor Green
+ 
