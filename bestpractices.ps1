@@ -504,29 +504,42 @@ foreach ($esx in $hosts)
         foreach ($datastore in $datastores)
         {
             add-content $logfile ""
-            if ($datastore.ExtensionData.info.vmfs.version -like "6.*")
+            $lun = $datastore.ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique 
+            if ($lun.count -eq 1)
             {
-                add-content $logfile ("The VMFS named " + $datastore.name + " is version six. Checking Automatic UNMAP configuration...")
-                $unmapargs = $esxcli.storage.vmfs.reclaim.config.get.createargs()
-                $unmapargs.volumelabel = $datastore.name
-                $unmapresult = $esxcli.storage.vmfs.reclaim.config.get.invoke($unmapargs)
-                if ($unmapresult.ReclaimPriority -ne "low")
+                add-content $logfile ("The UUID for this volume is " + $datastore.ExtensionData.Info.Vmfs.Extent.DiskName)
+                $esxcli=get-esxcli -VMHost $esx -v2
+                if ($lun -like 'naa.624a9370*')
                 {
-                    add-content $logfile ("Automatic Space Reclamation is not set to low. It is set to " + $unmapresult.ReclaimPriority)
-                    add-content $logfile "Setting to low..."
-                    $unmapsetargs = $esxcli.storage.vmfs.reclaim.config.set.createargs()
-                    $unmapsetargs.volumelabel = $datastore.name
-                    $unmapsetargs.reclaimpriority = "low"
-                    $esxcli.storage.vmfs.reclaim.config.set.invoke($unmapsetargs)
+                    if ($datastore.ExtensionData.info.vmfs.version -like "6.*")
+                    {
+                        add-content $logfile ("The VMFS named " + $datastore.name + " is version six. Checking Automatic UNMAP configuration...")
+                        $unmapargs = $esxcli.storage.vmfs.reclaim.config.get.createargs()
+                        $unmapargs.volumelabel = $datastore.name
+                        $unmapresult = $esxcli.storage.vmfs.reclaim.config.get.invoke($unmapargs)
+                        if ($unmapresult.ReclaimPriority -ne "low")
+                        {
+                            add-content $logfile ("Automatic Space Reclamation is not set to low. It is set to " + $unmapresult.ReclaimPriority)
+                            add-content $logfile "Setting to low..."
+                            $unmapsetargs = $esxcli.storage.vmfs.reclaim.config.set.createargs()
+                            $unmapsetargs.volumelabel = $datastore.name
+                            $unmapsetargs.reclaimpriority = "low"
+                            $esxcli.storage.vmfs.reclaim.config.set.invoke($unmapsetargs)
+                        }
+                        elseif ($unmapresult.ReclaimPriority -eq "low")
+                        {
+                            add-content $logfile ("Automatic Space Reclamation is correctly set to low.")
+                        }
+                    }
+                    else 
+                    {
+                        add-content $logfile ("The VMFS named " + $datastore.name + " is not version 6 so automatic UNMAP is not supported. Skipping.")
+                    }
                 }
-                elseif ($unmapresult.ReclaimPriority -eq "low")
+                else 
                 {
-                    add-content $logfile ("Automatic Space Reclamation is correctly set to low.")
+                    add-content $logfile "This is not a FlashArray datastore. Skipping."
                 }
-            }
-            else 
-            {
-                add-content $logfile ("The VMFS named " + $datastore.name + " is not version 6 so automatic UNMAP is not supported. Skipping.")
             }
         }
     }
