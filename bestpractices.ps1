@@ -4,7 +4,6 @@ For a different IO Operations limit beside the Pure Storage recommended value of
 To skip changing host-wide settings for XCOPY Transfer Size and In-Guest UNMAP change $hostwidesettings to $false
 #>
 $iopsvalue = 1
-$diskMaxIOSize = $false
 
 <#
 *******Disclaimer:******************************************************
@@ -16,12 +15,11 @@ will not be liable for any damage or loss to the system.
 ************************************************************************
 
 This script will:
+-Set Disk.DiskMaxIOSize to 4 MB (if indicated)
 -Check for a SATP rule for Pure Storage FlashArrays
 -Create a SATP rule for Round Robin and IO Operations Limit of 1 only for FlashArrays
 -Remove any incorrectly configured Pure Storage FlashArray rules
 -Configure any existing devices properly (Pure Storage FlashArray devices only)
--Set VAAI XCOPY transfer size to 16MB
--Enable EnableBlockDelete on ESXi 6 hosts only
 -Check all VMFS-6 volumes that automatic UNMAP is enabled
 
 All change operations are logged to a file. 
@@ -73,8 +71,10 @@ add-content $logfile '            \------------\'
 add-content $logfile 'Pure Storage FlashArray VMware ESXi Best Practices Script v 4.5 (APRIL-2018)'
 add-content $logfile '----------------------------------------------------------------------------------------------------'
 
+#Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI cannot be installed
+#Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
 
-if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) {
+if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
     if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
     {
       . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
@@ -83,16 +83,34 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
     {
         . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
     }
-    if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue) ) 
+    elseif (!(get-Module -Name VMware.PowerCLI -ListAvailable))
+    {
+        if (get-Module -name PowerShellGet -ListAvailable)
+        {
+            try
+            {
+                Get-PackageProvider -name NuGet -ListAvailable -ErrorAction stop
+            }
+            catch
+            {
+                Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -Confirm:$false
+            }
+            Install-Module -Name VMware.PowerCLI –Scope CurrentUser -Confirm:$false -Force
+        }
+        else
+        {
+            write-host ("PowerCLI could not automatically be installed because PowerShellGet is not present. Please install PowerShellGet or PowerCLI") -BackgroundColor Red
+            write-host "PowerShellGet can be found here https://www.microsoft.com/en-us/download/details.aspx?id=51451 or is included with PowerShell version 5"
+            write-host "Terminating Script" -BackgroundColor Red
+            return
+        }
+    }
+    if ((!(Get-Module -Name VMware.VimAutomation.Core -ListAvailable -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable)))
     {
         write-host ("PowerCLI not found. Please verify installation and retry.") -BackgroundColor Red
         write-host "Terminating Script" -BackgroundColor Red
-        add-content $logfile ("PowerCLI not found. Please verify installation and retry.")
-        add-content $logfile "Get it here: https://my.vmware.com/web/vmware/details?downloadGroup=PCLI650R1&productId=614"
-        add-content $logfile "Terminating Script" 
         return
     }
-        
 }
 set-powercliconfiguration -invalidcertificateaction "ignore" -confirm:$false |out-null
 if ((Get-PowerCLIVersion).build -lt 3737840)
@@ -205,7 +223,7 @@ else
     write-host ""
     $hosts= get-vmhost
 }
-
+$diskMaxIOSize = $false
 write-host "If you are using vSphere Replication or intend to use UEFI boot for your VMs, Disk.DiskMaxIOSize must be set to 4096 KB from 32768."
 $diskIOChoice = read-host "Would you like to make this host-wide change? (y/n)"
 
@@ -252,20 +270,99 @@ foreach ($esx in $hosts)
         }
         add-content $logfile ""
         add-content $logfile "-------------------------------------------------------"
-    }   
+    }  
+    #checking and setting FlashArray iSCSI targets for best practices (logintimeout of 30 seconds and delayedack to disabled)
+    $targets = $esxcli.iscsi.adapter.target.portal.list.invoke()  | where-object {$_.Target -like "*purestorage*"}
+    $iscsihba = $esx |Get-vmhosthba|where-object {$_.Model -eq "iSCSI Software Adapter"}
+    $sendtgts = $iscsihba | Get-IScsiHbaTarget -type send
+    add-content $logfile "Checking dynamic iSCSI targets that are FlashArray targets...Only ones that need to be fixed will be reported"
+    foreach ($target in $targets)
+    {
+        foreach ($sendtgt in $sendtgts)
+        {
+            if ($target.IP -eq $sendtgt.Address)
+            {
+                $iscsiargs = $esxcli.iscsi.adapter.discovery.sendtarget.param.get.CreateArgs()
+                $iscsiargs.adapter = $iscsihba.Device
+                $iscsiargs.address = $target.IP
+                $delayedAck = $esxcli.iscsi.adapter.discovery.sendtarget.param.get.invoke($iscsiargs) |where-object {$_.name -eq "DelayedAck"}
+                $loginTimeout = $esxcli.iscsi.adapter.discovery.sendtarget.param.get.invoke($iscsiargs) |where-object {$_.name -eq "LoginTimeout"}
+                if ($delayedAck.Current -eq "true")
+                {
+                    add-content $logfile "DelayedAck is not disabled on dynamic target $($target.target). Disabling... "
+                    $iscsiargs = $esxcli.iscsi.adapter.discovery.sendtarget.param.set.CreateArgs()
+                    $iscsiargs.adapter = $iscsihba.Device
+                    $iscsiargs.address = $target.IP
+                    $iscsiargs.value = "false"
+                    $iscsiargs.key = "DelayedAck"
+                    $esxcli.iscsi.adapter.discovery.sendtarget.param.set.invoke($iscsiargs) |out-null
+                }
+                if ($loginTimeout.Current -ne "30")
+                {
+                    add-content $logfile "LoginTimeout is not set to 30 seconds on dynamic target $($target.target). It is set to $($loginTimeout.Current). Setting to 30... "
+                    $iscsiargs = $esxcli.iscsi.adapter.discovery.sendtarget.param.set.CreateArgs()
+                    $iscsiargs.adapter = $iscsihba.Device
+                    $iscsiargs.address = $target.IP
+                    $iscsiargs.value = "30"
+                    $iscsiargs.key = "LoginTimeout"
+                    $esxcli.iscsi.adapter.discovery.sendtarget.param.set.invoke($iscsiargs) |out-null
+                }
+            }
+        }
+    } 
+    add-content $logfile "Checking static iSCSI targets that are FlashArray targets...Only ones that need to be fixed will be reported"
+    $statictgts = $iscsihba | Get-IScsiHbaTarget -type static
+    foreach ($target in $targets)
+    {
+        foreach ($statictgt in $statictgts)
+        {
+            if ($target.IP -eq $statictgt.Address)
+            {
+                $iscsiargs = $esxcli.iscsi.adapter.target.portal.param.get.CreateArgs()
+                $iscsiargs.adapter = $iscsihba.Device
+                $iscsiargs.address = $target.IP
+                $iscsiargs.name = $target.target
+                $delayedAck = $esxcli.iscsi.adapter.target.portal.param.get.invoke($iscsiargs) |where-object {$_.name -eq "DelayedAck"}
+                $loginTimeout = $esxcli.iscsi.adapter.target.portal.param.get.invoke($iscsiargs) |where-object {$_.name -eq "LoginTimeout"}
+                if ($delayedAck.Current -eq "true")
+                {
+                    add-content $logfile "DelayedAck is not disabled on static target $($target.target). Disabling... "
+                    $iscsiargs = $esxcli.iscsi.adapter.target.portal.param.set.CreateArgs()
+                    $iscsiargs.adapter = $iscsihba.Device
+                    $iscsiargs.address = $target.IP
+                    $iscsiargs.name = $target.target
+                    $iscsiargs.value = "false"
+                    $iscsiargs.key = "DelayedAck"
+                    $esxcli.iscsi.adapter.target.portal.param.set.invoke($iscsiargs) |out-null
+                }
+                if ($loginTimeout.Current -ne "30")
+                {
+                    add-content $logfile "LoginTimeout is not set to 30 seconds on static target $($target.target). It is set to $($loginTimeout.Current). Setting to 30... "
+                    $iscsiargs = $esxcli.iscsi.adapter.target.portal.param.set.CreateArgs()
+                    $iscsiargs.adapter = $iscsihba.Device
+                    $iscsiargs.address = $target.IP
+                    $iscsiargs.name = $target.target
+                    $iscsiargs.value = "30"
+                    $iscsiargs.key = "LoginTimeout"
+                    $esxcli.iscsi.adapter.target.portal.param.set.invoke($iscsiargs) |out-null
+                }
+            }
+        }
+    } 
+    #checking for correct multipathing SATP rules
     $rules = $esxcli.storage.nmp.satp.rule.list.invoke() |where-object {$_.Vendor -eq "PURE"}
     $correctrule = 0
     $iopsoption = "iops=" + $iopsvalue
     if ($rules.Count -ge 1)
     {
         add-content $logfile "Found the following existing Pure Storage SATP rules"
-        $rules | out-string | add-content $logfile
+        ($rules | out-string).TrimEnd() | add-content $logfile
         add-content $logfile "-----------------------------------------------"
         foreach ($rule in $rules)
         {
             add-content $logfile "-----------------------------------------------"
             add-content $logfile "Checking the following existing rule:"
-            $rule | out-string | add-content $logfile
+            ($rule | out-string).TrimEnd() | add-content $logfile
             $issuecount = 0
             if ($rule.DefaultPSP -eq "VMW_PSP_RR") 
             {
