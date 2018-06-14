@@ -430,7 +430,7 @@ $arrayspaceend = @()
 $arraychanges = @()
 $finaldatastores = @()
 $totalreclaimedvirtualspace = 0
-#start-sleep 120
+start-sleep 120
 for ($i=0;$i -lt $reclaimeddatastores.count;$i++)
 {
     $lun = $reclaimeddatastores[$i].ExtensionData.Info.Vmfs.Extent.DiskName |select-object -unique
