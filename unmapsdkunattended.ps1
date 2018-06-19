@@ -135,9 +135,19 @@ foreach ($flasharray in $flasharrays)
         $EndPoint +=  $temparray
         $purevolumes += Get-PfaVolumes -Array  $tempArray
         $arraySN = Get-PfaArrayAttributes -Array $tempArray
-        $arraySN = $arraySN.id.substring(0,18)
-        $arraySN = $arraySN -replace '-',''  
+        
+        if ($arraySN.id[0] -eq "0")
+        {
+          $arraySN = $arraySN.id.Substring(1)
+          $arraySN = $arraySN.substring(0,19)
+        } 
+        else
+        {
+            $arraySN = $arraySN.id.substring(0,18)
+        }
+        $arraySN = $arraySN -replace '-','' 
         $arraysnlist += $arraySN
+        add-content $logfile "FlashArray shortened serial is $($arraySN)"
     }
     catch
     {
