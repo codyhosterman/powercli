@@ -31,7 +31,7 @@ function get-faVolumeNameFromVvolUuid{
             [Parameter(Position=0,mandatory=$true)]
             [string]$purevip,
 
-            [Parameter(Position=1,mandatory=$true)]
+            [Parameter(Position=1,mandatory=$true,ValueFromPipeline=$True)]
             [Microsoft.PowerShell.Commands.WebRequestSession]$faSession,
 
             [Parameter(Position=2)]
@@ -180,7 +180,7 @@ function new-pureflasharrayRestSession {
         [Parameter(Position=0)]
         [string]$purevip,
         
-        [Parameter(Position=1)]
+        [Parameter(Position=1,ValueFromPipeline=$True)]
         [System.Management.Automation.PSCredential]$faCreds
     )
 
@@ -280,7 +280,7 @@ function remove-pureflasharrayRestSession {
             [Parameter(Position=0,mandatory=$true)]
             [string]$purevip,
 
-            [Parameter(Position=1,mandatory=$true)]
+            [Parameter(Position=1,mandatory=$true,ValueFromPipeline=$True)]
             [Microsoft.PowerShell.Commands.WebRequestSession]$faSession
     )
 
@@ -295,3 +295,114 @@ function remove-pureflasharrayRestSession {
            return $false 
     }
 }
+
+
+function get-vmdkFromWindowsdisk {
+    <#
+    .SYNOPSIS
+      Returns the VM disk object that corresponds to a given Windows file system
+    .DESCRIPTION
+      Takes in a drive letter and a VM object and returns a matching VMDK object
+    .INPUTS
+      VM, Drive Letter
+    .OUTPUTS
+      Returns VMDK object 
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  08/24/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$false,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine]$vm,
+
+            [Parameter(Position=1,mandatory=$false)]
+            [string]$driveLetter
+    )
+    if ($null -eq $global:defaultviserver)
+    {
+       throw "There is no PowerCLI connection to a vCenter, please connect first with connect-viserver."
+    }
+    if ($null -eq $vm)
+    {
+        try {
+            $vmName = Read-Host "Please enter in the name of your VM" 
+            $vm = get-vm -name $vmName -ErrorAction Stop 
+        }
+        catch {
+            throw $Global:Error[0]
+        }
+    }
+    try {
+        $guest = $vm |Get-VMGuest
+    }
+    catch {
+        throw $Error[0]
+    }
+    if ($guest.State -ne "running")
+    {
+        throw "This VM does not have VM tools running"
+    }
+    if ($guest.GuestFamily -ne "windowsGuest")
+    {
+        throw "This is not a Windows VM--it is $($guest.OSFullName)"
+    }
+    try {
+        $advSetting = Get-AdvancedSetting -Entity $vm -Name Disk.EnableUUID -ErrorAction Stop
+    }
+    catch {
+        throw $Error[0]
+    }
+    if ($advSetting.value -eq "FALSE")
+    {
+        throw "The VM $($vm.name) has the advanced setting Disk.EnableUUID set to FALSE. This must be set to TRUE for this cmdlet to work."    
+    }
+    if (($null -eq $driveLetter) -or ($driveLetter -eq ""))
+    {
+        try {
+            $driveLetter = Read-Host "Please enter in a drive letter" 
+            if (($null -eq $driveLetter) -or ($driveLetter -eq ""))
+            {
+                throw "No drive letter entered"
+            }
+        }
+        catch {
+            throw $Global:Error[0]
+        }
+    }
+    try {
+        $VMdiskSerialNumber = $vm |Invoke-VMScript -ScriptText "get-partition -driveletter $($driveLetter) | get-disk | ConvertTo-CSV -NoTypeInformation"  -WarningAction silentlyContinue -ErrorAction Stop |ConvertFrom-Csv
+    }
+    catch {
+            throw $Error[0]
+        }
+    if (![bool]($VMDiskSerialNumber.PSobject.Properties.name -match "serialnumber"))
+    {
+        throw ($VMdiskSerialNumber |Out-String) 
+    }
+    try {
+        $vmDisk = $vm | Get-HardDisk |Where-Object {$_.ExtensionData.backing.uuid.replace("-","") -eq $VMdiskSerialNumber.SerialNumber}
+    }
+    catch {
+        throw $Global:Error[0]
+    }
+    if ($null -ne $vmDisk)
+    {
+        return $vmDisk
+    }
+    else {
+        throw "Could not match the VM disk to a VMware virtual disk"
+    }
+}
+
