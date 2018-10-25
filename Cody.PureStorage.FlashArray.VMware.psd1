@@ -29,7 +29,7 @@
 	RootModule = 'Cody.PureStorage.FlashArray.VMware.psm1'
 	
 	# Version number of this module; major.minor[.build[.revision]]
-	ModuleVersion = '1.0.0.2'
+	ModuleVersion = '1.1.0.0'
 	
 	# ID used to uniquely identify this module
 	GUID = 'af1115ad-2e1f-499e-ba6f-eb024c3da92f'

@@ -1187,3 +1187,203 @@ function set-faVolVmfsCapacity {
     return $expandedDS
 }
 
+function get-faVolVmfsSnapshots {
+    <#
+    .SYNOPSIS
+      Retrieve all of the FlashArray snapshots of a given VMFS volume
+    .DESCRIPTION
+      Takes in a datastore and the corresponding FlashArray and returns any available snapshots.
+    .INPUTS
+      FlashArray connection and a datastore
+    .OUTPUTS
+      Returns any snapshots.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  09/17/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$true,ValueFromPipeline=$True)]
+            [PurePowerShell.PureArray]$flasharray,
+
+            [Parameter(Position=1,mandatory=$true,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.DatastoreManagement.Datastore]$datastore
+    )
+    
+    try {
+        $pureVol = $datastore | get-faVolfromVMFS -flasharray $flasharray -ErrorAction Stop
+        $volSnapshots = Get-PfaVolumeSnapshots -Array $flasharray -VolumeName $pureVol.name 
+    }
+    catch {
+        Write-Error $Global:Error
+        return $null
+    }
+    return $volSnapshots
+}
+
+function new-faVolVmfsSnapshot {
+    <#
+    .SYNOPSIS
+      Creates a new FlashArray snapshot of a given VMFS volume
+    .DESCRIPTION
+      Takes in a datastore and the corresponding FlashArray and creates a snapshot.
+    .INPUTS
+      FlashArray connection and a datastore
+    .OUTPUTS
+      Returns created snapshot.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  09/17/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$true,ValueFromPipeline=$True)]
+            [PurePowerShell.PureArray]$flasharray,
+
+            [Parameter(Position=1,mandatory=$true,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.DatastoreManagement.Datastore]$datastore,
+
+            [Parameter(Position=2)]
+            [string]$SnapName
+    )
+    
+    try {
+        $pureVol = $datastore | get-faVolfromVMFS -flasharray $flasharray -ErrorAction Stop
+        $NewSnapshot = New-PfaVolumeSnapshots -Array $flasharray -Sources $pureVol.name -Suffix $SnapName
+    }
+    catch {
+        throw $Global:Error
+        return $null
+    }
+    return $NewSnapshot
+}
+function new-faVolVmfsFromSnapshot {
+    <#
+    .SYNOPSIS
+      Mounts a copy of a VMFS datastore to a VMware cluster from a FlashArray snapshot.
+    .DESCRIPTION
+      Takes in a snapshot name, the corresponding FlashArray, and a cluster. The VMFS copy will be resignatured and mounted.
+    .INPUTS
+      FlashArray connection, a snapshotName, and a cluster.
+    .OUTPUTS
+      Returns the new datastore.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  09/17/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$true,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.Cluster]$cluster,
+
+            [Parameter(Position=1,mandatory=$true,ValueFromPipeline=$True)]
+            [PurePowerShell.PureArray]$flasharray,
+
+            [Parameter(Position=2,mandatory=$true)]
+            [string]$snapName
+    )
+    try {
+        $volumeName = $snapName.split(".")[0] + "-snap-" + (Get-Random -Minimum 1000 -Maximum 9999)
+        $newVol =New-PfaVolume -Array $flasharray -Source $snapName -VolumeName $volumeName -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+    $hostGroup = $flasharray |get-faHostGroupfromVcCluster -cluster $cluster
+    New-PfaHostGroupVolumeConnection -Array $flasharray -VolumeName $newVol.name -HostGroupName $hostGroup.name |Out-Null
+    $esxi = $cluster | Get-VMHost| where-object {($_.ConnectionState -eq 'Connected')} |Select-Object -last 1 
+    $esxi | Get-VMHostStorage -RescanAllHba -RescanVMFS -ErrorAction stop |Out-Null
+    $hostStorage = get-view -ID $esxi.ExtensionData.ConfigManager.StorageSystem
+    $resigVolumes= $hostStorage.QueryUnresolvedVmfsVolume()
+    $newNAA =  "naa.624a9370" + $newVol.serial.toLower()
+    $deleteVol = $false
+    foreach ($resigVolume in $resigVolumes)
+    {
+        if ($deleteVol -eq $true)
+        {
+            break
+        }
+        foreach ($resigExtent in $resigVolume.Extent)
+        {
+            if ($resigExtent.Device.DiskName -eq $newNAA)
+            {
+                if ($resigVolume.ResolveStatus.Resolvable -eq $false)
+                {
+                    if ($resigVolume.ResolveStatus.MultipleCopies -eq $true)
+                    {
+                        write-host "The volume cannot be resignatured as more than one unresignatured copy is present. Deleting and ending." -BackgroundColor Red
+                        write-host "The following volume(s) are presented and need to be removed/resignatured first:"
+                        $resigVolume.Extent.Device.DiskName |where-object {$_ -ne $newNAA}
+                    }
+                    $deleteVol = $true
+                    break
+                }
+                else {
+                    $volToResignature = $resigVolume
+                    break
+                }
+            }
+        }
+    }
+    if (($null -eq $volToResignature) -and ($deleteVol -eq $false))
+    {
+        write-host "No unresolved volume found on the created volume. Deleting and ending." -BackgroundColor Red
+        $deleteVol = $true
+    }
+    if ($deleteVol -eq $true)
+    {
+        Remove-PfaHostGroupVolumeConnection -Array $flasharray -VolumeName $newVol.name -HostGroupName $hostGroup.name |Out-Null
+        Remove-PfaVolumeOrSnapshot -Array $flasharray -Name $newVol.name |Out-Null
+        Remove-PfaVolumeOrSnapshot -Array $flasharray -Name $newVol.name -Eradicate |Out-Null
+        return $null
+    }
+    $esxcli=get-esxcli -VMHost $esxi -v2 -ErrorAction stop
+    $resigOp = $esxcli.storage.vmfs.snapshot.resignature.createargs()
+    $resigOp.volumelabel = $volToResignature.VmfsLabel  
+    $esxcli.storage.vmfs.snapshot.resignature.invoke($resigOp) |out-null
+    Start-sleep -s 5
+    $esxi |  Get-VMHostStorage -RescanVMFS -ErrorAction stop |Out-Null
+    $datastores = $esxi| Get-Datastore -ErrorAction stop 
+    foreach ($ds in $datastores)
+    {
+        $naa = $ds.ExtensionData.Info.Vmfs.Extent.DiskName
+        if ($naa -eq $newNAA)
+        {
+            $resigds = $ds | Set-Datastore -Name $newVol.name -ErrorAction stop
+            return $resigds
+        }
+    }    
+}
