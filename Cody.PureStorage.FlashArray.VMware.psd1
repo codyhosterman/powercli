@@ -4,8 +4,8 @@
 	 Created by:   	Cody Hosterman
 	 Organization: 	Pure Storage, Inc.
 	 Filename:     	Cody.PureStorage.FlashArray.VMware.psd1
-	 Version:		1.0.0.2
-	 Copyright:		2014 Pure Storage, Inc.
+	 Version:		1.1.0.1
+	 Copyright:		2018 Pure Storage, Inc.
 	-------------------------------------------------------------------------
 	 Module Name: PureStoragePowerShell
 	Disclaimer
@@ -29,7 +29,7 @@
 	RootModule = 'Cody.PureStorage.FlashArray.VMware.psm1'
 	
 	# Version number of this module; major.minor[.build[.revision]]
-	ModuleVersion = '1.1.0.0'
+	ModuleVersion = '1.1.0.1'
 	
 	# ID used to uniquely identify this module
 	GUID = 'af1115ad-2e1f-499e-ba6f-eb024c3da92f'
@@ -41,7 +41,7 @@
 	CompanyName = 'Pure Storage, Inc.'
 	
 	# Copyright statement for this module
-	Copyright = '(c) 2014 Pure Storage, Inc. All rights reserved.'
+	Copyright = '(c) 2018 Pure Storage, Inc. All rights reserved.'
 	
 	# Description of the functionality provided by this module
 	Description = 'Pure Storage FlashArray VMware PowerCLI integration with Windows PowerShell.'

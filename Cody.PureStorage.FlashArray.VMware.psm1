@@ -37,6 +37,7 @@ function get-faVolumeNameFromVvolUuid{
             [Parameter(Position=2)]
             [string]$vvolUUID
     )
+    $ErrorActionPreference = "stop"
 if (($vvolUUID -eq $null) -or ($vvolUUID -eq ""))
 {
     #Choose VM
@@ -177,13 +178,12 @@ function new-pureflasharrayRestSession {
     [CmdletBinding()]
     Param(
             
-        [Parameter(Position=0)]
+        [Parameter(Position=0,mandatory=$true)]
         [string]$purevip,
         
-        [Parameter(Position=1,ValueFromPipeline=$True)]
+        [Parameter(Position=1,ValueFromPipeline=$True,mandatory=$true)]
         [System.Management.Automation.PSCredential]$faCreds
     )
-
     #Connect to FlashArray
 add-type @"
 using System.Net;
@@ -199,55 +199,20 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
     #Get FA API token
-    $faConnected = $true
-    do {
-        try {
-                if (($null -eq $purevip) -or ($purevip -eq "") -or ($faConnected -eq $false))
-                {
-                    Write-Host
-                    $purevip = read-host "Please enter the mgmt IP or FQDN of your FlashArray"
-                }                
-                if (($null -eq $faCreds) -or ($faConnected -eq $false))
-                {
-                    Write-Host
-                    $faCreds = Get-Credential -Message "Please enter your FlashArray credentials"
-                    $tempPass = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($faCreds.Password)
-                    $UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($tempPass)
-                    $AuthAction = @{
-                        password = ${UnsecurePassword}
-                        username = ${faCreds}.UserName
-                    }
-                }
-                else
-                {
-                    $tempPass = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($faCreds.Password)
-                    $UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($tempPass)
-                    $AuthAction = @{
-                        password = ${UnsecurePassword}
-                        username = ${faCreds}.UserName
-                    }
-                }
-                $ApiToken = Invoke-RestMethod -Method Post -Uri "https://${purevip}/api/1.14/auth/apitoken" -Body $AuthAction -ErrorAction Stop
-                $faConnected = $true
-        }
-        catch {
-                write-Warning -message $Error[0] 
-                $faConnected = $false
-        }
-    } while ($faConnected -eq $false)
+    $tempPass = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($faCreds.Password)
+    $UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($tempPass)
+    $AuthAction = @{
+        password = ${UnsecurePassword}
+        username = ${faCreds}.UserName
+    }
+    $ApiToken = Invoke-RestMethod -Method Post -Uri "https://${purevip}/api/1.14/auth/apitoken" -Body $AuthAction -ErrorAction Stop
 
-    #Create FA session
-    try {
-        $SessionAction = @{
-            api_token = $ApiToken.api_token
-        }
-        Invoke-RestMethod -Method Post -Uri "https://${purevip}/api/1.14/auth/session" -Body $SessionAction -SessionVariable Session -ErrorAction Stop |Out-Null
-        return $Session
+#Create FA session
+    $SessionAction = @{
+        api_token = $ApiToken.api_token
     }
-    catch {
-           Write-Error -Message $Error[0]
-           return $null  
-    }
+    Invoke-RestMethod -Method Post -Uri "https://${purevip}/api/1.14/auth/session" -Body $SessionAction -SessionVariable Session -ErrorAction Stop |Out-Null
+    return $Session
 }
 
 function remove-pureflasharrayRestSession {
@@ -287,7 +252,6 @@ function remove-pureflasharrayRestSession {
      #Delete FA session
      try {
         Invoke-RestMethod -Method Delete -Uri "https://${purevip}/api/1.14/auth/session"  -WebSession $faSession -ErrorAction Stop |Out-Null
-        Write-Host "FlashArray session disconnected."
         return $true
     }
     catch {
@@ -1292,7 +1256,7 @@ function new-faVolVmfsFromSnapshot {
     .NOTES
       Version:        1.0
       Author:         Cody Hosterman https://codyhosterman.com
-      Creation Date:  09/17/2018
+      Creation Date:  10/24/2018
       Purpose/Change: Initial script development
   
     *******Disclaimer:******************************************************
@@ -1386,4 +1350,487 @@ function new-faVolVmfsFromSnapshot {
             return $resigds
         }
     }    
+}
+
+function update-faVvolVmVolumeGroup {
+    <#
+    .SYNOPSIS
+      Updates the volume group on a FlashArray for a VVol-based VM.
+    .DESCRIPTION
+      Takes in a VM and a FlashArray connection. A volume group will be created if it does not exist, if it does, the name will be updated if inaccurate. Any volumes for the given VM will be put into that group.
+    .INPUTS
+      FlashArray connection, a virtual machine.
+    .OUTPUTS
+      Returns the FlashArray volume names of the input VM.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/24/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine]$vm,
+
+            [Parameter(Position=1,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=2,ValueFromPipeline=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+    $configUUID = $vm.ExtensionData.Config.VmStorageObjectId
+    if ($null -eq $configUUID)
+    {
+        throw "The input VM is not a VVol-based virtual machine."
+    }
+    $faSession = $faCreds | new-pureflasharrayRestSession -purevip $purevip
+    $volumeConfig =  Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${configUUID}'" -WebSession $faSession -ErrorAction Stop
+    $configVVolName = ($volumeConfig |where-object {$_.key -eq "PURE_VVOL_ID"}).name
+    if ($null -eq $configVVolName)
+    {
+        throw "This VM was not found on this FlashArray"
+    }
+    if ($vm.Name -match "^[a-zA-Z0-9\-]+$")
+    {
+        $vmName = $vm.Name
+    }
+    else
+    {
+        $vmName = $vm.Name -replace "[^\w\-]", ""
+        $vmName = $vmName -replace "[_]", ""
+        $vmName = $vmName -replace " ", ""
+    }
+    $vGroupRand = '{0:X}' -f (get-random -Minimum 286331153 -max 4294967295)
+    $newName = "vvol-$($vmName)-$($vGroupRand)-vg"
+    if ([Regex]::Matches($configVVolName, "/").Count -eq 0)
+    {
+        $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
+        $vGroup = New-PfaVolumeGroup -Array $flasharray -Name $newName
+    }
+    else {
+        $vGroup = $configVVolName.split('/')[0]
+        $vGroup = Invoke-RestMethod -Method Put -Uri "https://${purevip}/api/1.14/vgroup/${vGroup}?name=${newName}" -WebSession $faSession -ErrorAction Stop
+    }
+    $vmId = $vm.ExtensionData.Config.InstanceUuid
+    $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
+    $volumeNames = $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
+    $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
+    foreach ($volumeName in $volumeNames)
+    {
+        if ([Regex]::Matches($volumeName.name, "/").Count -eq 1)
+        {
+            if ($newName -ne $volumeName.name.split('/')[0])
+            {
+                $volName= $volumeName.name.split('/')[1]
+                Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+            }
+        }
+        else {
+            $volName= $volumeName.name
+            Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+        }
+    }
+    $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
+    $volumeNames = $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
+    remove-pureflasharrayRestSession -purevip $purevip -faSession $faSession |Out-Null
+    return $volumeNames.name
+}
+
+function get-vvolUuidFromHardDisk {
+    <#
+    .SYNOPSIS
+      Gets the VVol UUID of a virtual disk
+    .DESCRIPTION
+      Takes in a virtual disk object
+    .INPUTS
+      Virtual disk object (get-harddisk).
+    .OUTPUTS
+      Returns the VVol UUID.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$vmdk
+    )
+    if ($vmdk.ExtensionData.Backing.backingObjectId -eq "")
+    {
+        throw "This is not a VVol-based hard disk."
+    }
+    if ((($vmdk |Get-Datastore).ExtensionData.Info.vvolDS.storageArray.vendorId) -ne "PURE") {
+        throw "This is not a Pure Storage FlashArray VVol disk"
+    }
+    else {
+        return $vmdk.ExtensionData.Backing.backingObjectId
+    }
+
+}
+
+function get-faSnapshotsFromVvolHardDisk {
+    <#
+    .SYNOPSIS
+      Returns all of the FlashArray snapshot names of a given hard disk
+    .DESCRIPTION
+      Takes in a virtual disk object
+    .INPUTS
+      Virtual disk object (get-harddisk).
+    .OUTPUTS
+      Returns all specified snapshot names.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(      
+            [Parameter(Position=0,mandatory=$True)]
+            [string]$purevip,
+        
+            [Parameter(Position=1,ValueFromPipeline=$True)]
+            [System.Management.Automation.PSCredential]$faCreds,
+
+            [Parameter(Position=2,ValueFromPipeline=$True)]
+            [Microsoft.PowerShell.Commands.WebRequestSession]$faSession,
+
+            [Parameter(Position=3,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$vmdk
+    )
+   if (($null -eq $faCreds) -and ($null -eq $faSession))
+   {
+        throw "You must either enter a FlashArray REST session or credentials to create one."
+   }
+   if ($null -eq $faSession) {
+        $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds
+   }
+   $vvolUuid = get-vvolUuidFromHardDisk -vmdk $vmdk
+   $faVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid 
+   $volumeSnaps = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume/${faVolume}?snap=true" -WebSession $faSession -ErrorAction Stop
+   $snapNames = @()
+   foreach ($volumeSnap in $volumeSnaps)
+   {
+        $snapNames += $volumeSnap.name 
+   }
+   return $snapNames
+}
+
+function copy-faVvolVmdkToNewVvolVmdk {
+    <#
+    .SYNOPSIS
+      Takes an existing VVol-based virtual disk and creates a new VVol virtual disk from it.
+    .DESCRIPTION
+      Takes in a hard disk and creates a copy of it to a certain VM.
+    .INPUTS
+      FlashArray connection information, a virtual machine, and a virtual disk.
+    .OUTPUTS
+      Returns the new hard disk.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine]$targetVm,
+
+            [Parameter(Position=1,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$vmdk,
+
+            [Parameter(Position=2,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=3,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+        $ErrorActionPreference = "stop"
+        $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds 
+        $vvolUuid = get-vvolUuidFromHardDisk -vmdk $vmdk 
+        $faVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid 
+        $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError 
+        $datastore = $vmdk | Get-Datastore 
+        $newHardDisk = New-HardDisk -Datastore $datastore -CapacityGB $vmdk.CapacityGB -VM $targetVm 
+        $newVvolUuid = get-vvolUuidFromHardDisk -vmdk $newHardDisk 
+        $newFaVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $newVvolUuid 
+        New-PfaVolume -Array $flasharray -Source $faVolume -Overwrite -VolumeName $newFaVolume  |Out-Null
+        return $newHardDisk
+}
+
+function copy-faSnapshotToExistingVvolVmdk {
+    <#
+    .SYNOPSIS
+      Takes an snapshot and creates a new VVol virtual disk from it.
+    .DESCRIPTION
+      Takes in a hard disk and creates a copy of it to a certain VM.
+    .INPUTS
+      FlashArray connection information, a virtual machine, and a virtual disk.
+    .OUTPUTS
+      Returns the new hard disk.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$true)]
+            [string]$snapshotName,
+
+            [Parameter(Position=1,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$vmdk,
+
+            [Parameter(Position=2,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=3,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+        $ErrorActionPreference = "stop"
+        $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds 
+        $vvolUuid = get-vvolUuidFromHardDisk -vmdk $vmdk 
+        $faVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid 
+        $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError 
+        $datastore = $vmdk | Get-Datastore 
+        $arrayID = (Get-PfaArrayAttributes -Array $flasharray).id
+        if ($datastore.ExtensionData.info.vvolDS.storageArray[0].uuid.substring(16) -eq $arrayID)
+        {
+            $snapshotSize = Get-PfaSnapshotSpaceMetrics -Array $flasharray -Name $snapshotName
+            if ($vmdk.ExtensionData.capacityinBytes -eq $snapshotSize.size)
+            {
+                New-PfaVolume -Array $flasharray -Source $snapshotName -Overwrite -VolumeName $faVolume  |Out-Null
+                return $vmdk
+            }
+            elseif ($vmdk.ExtensionData.capacityinBytes -lt $snapshotSize.size) {
+                $vmdk = Set-HardDisk -HardDisk $vmdk -CapacityKB ($snapshotSize.size / 1024) -Confirm:$false 
+                $vmdk = New-PfaVolume -Array $flasharray -Source $snapshotName -Overwrite -VolumeName $faVolume 
+                return $vmdk
+            }
+            else {
+                throw "The target VVol hard disk is larger than the snapshot size and VMware does not allow hard disk shrinking."
+            }
+            
+        }
+        else {
+            throw "The snapshot and target VVol VMDK are not on the same array."
+        }
+        
+}
+
+function copy-faSnapshotToNewVvolVmdk {
+    <#
+    .SYNOPSIS
+      Takes an snapshot and overwrites an existing VVol virtual disk from it.
+    .DESCRIPTION
+      Takes an snapshot and overwrites an existing VVol virtual disk from it.
+    .INPUTS
+      FlashArray connection information, a source snapshot, and a virtual disk.
+    .OUTPUTS
+      Returns the hard disk.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$true)]
+            [string]$snapshotName,
+
+            [Parameter(Position=1,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine]$targetVm,
+
+            [Parameter(Position=2,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=3,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+        $ErrorActionPreference = "stop"
+        $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds 
+        $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError 
+        $arrayID = (Get-PfaArrayAttributes -Array $flasharray).id
+        $datastore = $targetVm| Get-VMHost | Get-Datastore |where-object {$_.Type -eq "VVOL"} |Where-Object {$_.ExtensionData.info.vvolDS.storageArray[0].uuid.substring(16) -eq $arrayID} |Select-Object -First 1
+        $snapshotSize = Get-PfaSnapshotSpaceMetrics -Array $flasharray -Name $snapshotName
+        $newHardDisk = New-HardDisk -Datastore $datastore -CapacityKB ($snapshotSize.size / 1024 ) -VM $targetVm 
+        $newVvolUuid = get-vvolUuidFromHardDisk -vmdk $newHardDisk 
+        $newFaVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $newVvolUuid 
+        New-PfaVolume -Array $flasharray -Source $snapshotName -Overwrite -VolumeName $newFaVolume  |Out-Null
+        return $newHardDisk     
+}
+
+function copy-faVvolVmdkToExistingVvolVmdk {
+    <#
+    .SYNOPSIS
+      Takes an virtual disk and refreshes an existing VVol virtual disk from it.
+    .DESCRIPTION
+      Takes an virtual disk and refreshes an existing VVol virtual disk from it.
+    .INPUTS
+      FlashArray connection information, a source and target virtual disk.
+    .OUTPUTS
+      Returns the new hard disk.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/26/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$sourceVmdk,
+
+            [Parameter(Position=1,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$targetVmdk,
+
+            [Parameter(Position=2,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=3,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+        $ErrorActionPreference = "stop"
+        $targetDatastore = $targetVmdk | Get-Datastore 
+        $sourceDatastore = $sourceVmdk | Get-Datastore 
+        if ($sourceDatastore.ExtensionData.info.vvolDS.storageArray[0].uuid -eq $targetDatastore.ExtensionData.info.vvolDS.storageArray[0].uuid)
+        {
+            $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds 
+            $vvolUuid = get-vvolUuidFromHardDisk -vmdk $sourceVmdk 
+            $sourceFaVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid 
+            $vvolUuid = get-vvolUuidFromHardDisk -vmdk $targetVmdk 
+            $targetFaVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid
+            $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError 
+            if ($targetVmdk.CapacityKB -eq $sourceVmdk.CapacityKB)
+            {
+                New-PfaVolume -Array $flasharray -Source $sourceFaVolume -Overwrite -VolumeName $targetFaVolume |Out-Null
+                return $targetVmdk
+            }
+            elseif ($targetVmdk.CapacityKB -lt $sourceVmdk.CapacityKB) {
+                $targetVmdk = Set-HardDisk -HardDisk $targetVmdk -CapacityKB $sourceVmdk.CapacityKB -Confirm:$false 
+                New-PfaVolume -Array $flasharray -Source $sourceFaVolume -Overwrite -VolumeName $targetFaVolume  |Out-Null
+                return $targetVmdk
+            }
+            else {
+                throw "The target VVol hard disk is larger than the snapshot size and VMware does not allow hard disk shrinking."
+            }
+            
+        }
+        else {
+            throw "The snapshot and target VVol VMDK are not on the same array."
+        }
+        
+}
+
+function new-faSnapshotOfVvolVmdk {
+    <#
+    .SYNOPSIS
+      Takes a VVol virtual disk and creates a FlashArray snapshot.
+    .DESCRIPTION
+      Takes a VVol virtual disk and creates a snapshot of it.
+    .INPUTS
+      FlashArray connection information and a virtual disk.
+    .OUTPUTS
+      Returns the snapshot name.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  10/28/2018
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.VirtualDevice.HardDisk]$vmdk,
+
+            [Parameter(Position=1,mandatory=$True)]
+            [string]$purevip,
+            
+            [Parameter(Position=2,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds
+    )
+    $faSession = new-pureflasharrayRestSession -purevip $purevip -faCreds $faCreds -ErrorAction Stop
+    $vvolUuid = get-vvolUuidFromHardDisk -vmdk $vmdk -ErrorAction Stop
+    $faVolume = get-faVolumeNameFromVvolUuid -faSession $faSession -purevip $purevip -vvolUUID $vvolUuid -ErrorAction Stop
+    $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError -ErrorAction Stop
+    $snapshot = New-PfaVolumeSnapshots -Array $flasharray -Sources $faVolume -ErrorAction Stop
+    return $snapshot.name
 }
