@@ -1379,71 +1379,102 @@ function update-faVvolVmVolumeGroup {
 
     [CmdletBinding()]
     Param(
-            [Parameter(Position=0,mandatory=$True,ValueFromPipeline=$True)]
-            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine]$vm,
+            [Parameter(Position=0,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.Inventory.VirtualMachine[]]$vm,
 
             [Parameter(Position=1,mandatory=$True)]
             [string]$purevip,
             
-            [Parameter(Position=2,ValueFromPipeline=$True)]
-            [System.Management.Automation.PSCredential]$faCreds
+            [Parameter(Position=2,ValueFromPipeline=$True,mandatory=$True)]
+            [System.Management.Automation.PSCredential]$faCreds,
+
+            [Parameter(Position=3,ValueFromPipeline=$True)]
+            [VMware.VimAutomation.ViCore.Types.V1.DatastoreManagement.Datastore]$datastore
     )
-    $configUUID = $vm.ExtensionData.Config.VmStorageObjectId
-    if ($null -eq $configUUID)
-    {
-        throw "The input VM is not a VVol-based virtual machine."
+    Begin{
+        $faSession = $faCreds | new-pureflasharrayRestSession -purevip $purevip
+        $volumeFinalNames = @()
     }
-    $faSession = $faCreds | new-pureflasharrayRestSession -purevip $purevip
-    $volumeConfig =  Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${configUUID}'" -WebSession $faSession -ErrorAction Stop
-    $configVVolName = ($volumeConfig |where-object {$_.key -eq "PURE_VVOL_ID"}).name
-    if ($null -eq $configVVolName)
-    {
-        throw "This VM was not found on this FlashArray"
-    }
-    if ($vm.Name -match "^[a-zA-Z0-9\-]+$")
-    {
-        $vmName = $vm.Name
-    }
-    else
-    {
-        $vmName = $vm.Name -replace "[^\w\-]", ""
-        $vmName = $vmName -replace "[_]", ""
-        $vmName = $vmName -replace " ", ""
-    }
-    $vGroupRand = '{0:X}' -f (get-random -Minimum 286331153 -max 4294967295)
-    $newName = "vvol-$($vmName)-$($vGroupRand)-vg"
-    if ([Regex]::Matches($configVVolName, "/").Count -eq 0)
-    {
-        $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
-        $vGroup = New-PfaVolumeGroup -Array $flasharray -Name $newName
-    }
-    else {
-        $vGroup = $configVVolName.split('/')[0]
-        $vGroup = Invoke-RestMethod -Method Put -Uri "https://${purevip}/api/1.14/vgroup/${vGroup}?name=${newName}" -WebSession $faSession -ErrorAction Stop
-    }
-    $vmId = $vm.ExtensionData.Config.InstanceUuid
-    $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
-    $volumeNames = $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
-    $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
-    foreach ($volumeName in $volumeNames)
-    {
-        if ([Regex]::Matches($volumeName.name, "/").Count -eq 1)
-        {
-            if ($newName -ne $volumeName.name.split('/')[0])
+    Process{
+        if ($null -ne $datastore){
+            if ($datastore.Type -ne "VVOL")
             {
-                $volName= $volumeName.name.split('/')[1]
-                Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+                throw "This is not a VVol datastore"
             }
+            if ($datastore.ExtensionData.Info.VvolDS.StorageArray[0].VendorId -ne "PURE") {
+                throw "This is not a Pure Storage VVol datastore"
+            }
+            $vms = $datastore |get-vm
         }
-        else {
-            $volName= $volumeName.name
-            Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+        elseif ($null -ne $vm) {
+            $vms = $vm
+        }
+        else{
+            throw "You must enter in either a VM object or a VVol datastore"
+        }
+        foreach ($vm in $vms)
+        {
+            $configUUID = $vm.ExtensionData.Config.VmStorageObjectId
+            if ($null -eq $configUUID)
+            {
+                write-warning -message  "The input VM $($vm.name) is not a VVol-based virtual machine. Skipping"
+                continue
+            }
+            $volumeConfig =  Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${configUUID}'" -WebSession $faSession -ErrorAction Stop
+            $configVVolName = ($volumeConfig |where-object {$_.key -eq "PURE_VVOL_ID"}).name
+            if ($null -eq $configVVolName)
+            {
+                write-warning -message "The VM $($vm.name) was not found on this FlashArray. Skipping."
+                continue
+            }
+            if ($vm.Name -match "^[a-zA-Z0-9\-]+$")
+            {
+                $vmName = $vm.Name
+            }
+            else
+            {
+                $vmName = $vm.Name -replace "[^\w\-]", ""
+                $vmName = $vmName -replace "[_]", ""
+                $vmName = $vmName -replace " ", ""
+            }
+            $vGroupRand = '{0:X}' -f (get-random -Minimum 286331153 -max 4294967295)
+            $newName = "vvol-$($vmName)-$($vGroupRand)-vg"
+            if ([Regex]::Matches($configVVolName, "/").Count -eq 0)
+            {
+                $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
+                $vGroup = New-PfaVolumeGroup -Array $flasharray -Name $newName
+            }
+            else {
+                $vGroup = $configVVolName.split('/')[0]
+                $vGroup = Invoke-RestMethod -Method Put -Uri "https://${purevip}/api/1.14/vgroup/${vGroup}?name=${newName}" -WebSession $faSession -ErrorAction Stop
+            }
+            $vmId = $vm.ExtensionData.Config.InstanceUuid
+            $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
+            $volumeNames = $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
+            $flasharray = New-PfaArray -EndPoint $purevip -Credentials $faCreds -IgnoreCertificateError
+            foreach ($volumeName in $volumeNames)
+            {
+                if ([Regex]::Matches($volumeName.name, "/").Count -eq 1)
+                {
+                    if ($newName -ne $volumeName.name.split('/')[0])
+                    {
+                        $volName= $volumeName.name.split('/')[1]
+                        Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+                    }
+                }
+                else {
+                    $volName= $volumeName.name
+                    Add-PfaVolumeToContainer -Array $flasharray -Container $newName -Name $volName |Out-Null
+                }
+            }
+            $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
+            $volumeFinalNames += $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
         }
     }
-    $volumesVmId = Invoke-RestMethod -Method Get -Uri "https://${purevip}/api/1.14/volume?tags=true&filter=value='${vmId}'" -WebSession $faSession -ErrorAction Stop
-    $volumeNames = $volumesVmId |where-object {$_.key -eq "VMW_VmID"}
-    remove-pureflasharrayRestSession -purevip $purevip -faSession $faSession |Out-Null
-    return $volumeNames.name
+    End{
+        remove-pureflasharrayRestSession -purevip $purevip -faSession $faSession |Out-Null
+        return $volumeFinalNames.name
+    }
 }
 
 function get-vvolUuidFromHardDisk {
@@ -1790,7 +1821,6 @@ function copy-faVvolVmdkToExistingVvolVmdk {
         }
         
 }
-
 function new-faSnapshotOfVvolVmdk {
     <#
     .SYNOPSIS

@@ -4,7 +4,7 @@
 	 Created by:   	Cody Hosterman
 	 Organization: 	Pure Storage, Inc.
 	 Filename:     	Cody.PureStorage.FlashArray.VMware.psd1
-	 Version:		1.1.0.1
+	 Version:		1.1.1.0
 	 Copyright:		2018 Pure Storage, Inc.
 	-------------------------------------------------------------------------
 	 Module Name: PureStoragePowerShell
@@ -29,7 +29,7 @@
 	RootModule = 'Cody.PureStorage.FlashArray.VMware.psm1'
 	
 	# Version number of this module; major.minor[.build[.revision]]
-	ModuleVersion = '1.1.0.1'
+	ModuleVersion = '1.1.1.0'
 	
 	# ID used to uniquely identify this module
 	GUID = 'af1115ad-2e1f-499e-ba6f-eb024c3da92f'
@@ -85,7 +85,7 @@
 	NestedModules = @()
 	
 	# Functions to export from this module
-	FunctionsToExport = '*'
+	FunctionsToExport = 'get-faVolumeNameFromVvolUuid','new-pureflasharrayRestSession','remove-pureflasharrayRestSession','get-vmdkFromWindowsDisk','new-faHostFromVmHost','get-faHostFromVmHost','get-faHostGroupfromVcCluster','new-faHostGroupfromVcCluster','set-vmHostPureFaiSCSI','set-clusterPureFAiSCSI','get-faVolfromVMFS','new-faVolVmfs','add-faVolVmfsToCluster','set-faVolVmfsCapacity','get-faVolVmfsSnapshots','new-faVolVmfsSnapshot','new-faVolVmfsFromSnapshot','update-faVvolVmVolumeGroup','get-vvolUuidFromHardDisk','get-faSnapshotsFromVvolHardDisk','copy-faVvolVmdkToNewVvolVmdk','copy-faSnapshotToExistingVvolVmdk','copy-faSnapshotToNewVvolVmdk','copy-faVvolVmdkToExistingVvolVmdk','new-faSnapshotOfVvolVmdk'
 	
 	# Cmdlets to export from this module
 	CmdletsToExport = '*'
