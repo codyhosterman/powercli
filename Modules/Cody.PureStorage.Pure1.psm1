@@ -124,16 +124,16 @@ function Get-PureOneArrays {
     [CmdletBinding()]
     Param(
             [Parameter(Position=0)]
-            [string]$pureOneToken,
-
-            [Parameter(Position=1)]
             [string]$arrayName,
 
-            [Parameter(Position=2)]
+            [Parameter(Position=1)]
             [string]$arrayProduct,
             
+            [Parameter(Position=2)]
+            [string]$arrayId,
+
             [Parameter(Position=3)]
-            [string]$arrayId
+            [string]$pureOneToken
     )
     Begin{
         if ($arrayProduct -ne "")
@@ -216,21 +216,20 @@ function New-PureOneRestOperation {
 
     [CmdletBinding()]
     Param(
-        [Parameter(Position=0)]
-        [string]$pureOneToken,
-
-        [Parameter(Position=1,mandatory=$True)]
+        [Parameter(Position=0,mandatory=$True)]
         [string]$resourceType,
 
-        [Parameter(Position=2)]
+        [Parameter(Position=1)]
         [string]$queryFilter,
 
-        [Parameter(Position=3)]
+        [Parameter(Position=2)]
         [string]$jsonBody,
 
-        [Parameter(Position=4,mandatory=$True)]
-        [string]$restOperationType
+        [Parameter(Position=3,mandatory=$True)]
+        [string]$restOperationType,
 
+        [Parameter(Position=4)]
+        [string]$pureOneToken
     )
     Begin{
         if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
@@ -291,16 +290,16 @@ function Get-PureOneArrayTags {
     [CmdletBinding()]
     Param(
             [Parameter(Position=0)]
-            [string]$pureOneToken,
-
-            [Parameter(Position=1)]
             [string[]]$arrayNames,
          
-            [Parameter(Position=2)]
+            [Parameter(Position=1)]
             [string[]]$arrayIds,
 
+            [Parameter(Position=2)]
+            [string]$tagKey,
+
             [Parameter(Position=3)]
-            [string]$tagKey
+            [string]$pureOneToken
     )
     Begin{
         if (($arrayNames.count -gt 0) -and ($arrayIds.count -gt 0))
@@ -399,19 +398,19 @@ function Set-PureOneArrayTags {
     [CmdletBinding()]
     Param(
             [Parameter(Position=0)]
-            [string]$pureOneToken,
-
-            [Parameter(Position=1)]
             [string[]]$arrayNames,
          
-            [Parameter(Position=2)]
+            [Parameter(Position=1)]
             [string[]]$arrayIds,
 
-            [Parameter(Position=3,mandatory=$True)]
+            [Parameter(Position=2,mandatory=$True)]
             [string]$tagKey,
 
-            [Parameter(Position=4,mandatory=$True)]
-            [string]$tagValue
+            [Parameter(Position=3,mandatory=$True)]
+            [string]$tagValue,
+
+            [Parameter(Position=4)]
+            [string]$pureOneToken
 
     )
     Begin{
@@ -478,5 +477,614 @@ function Set-PureOneArrayTags {
     }
     End{
         return $pureArrayTags.items
+    }
+}
+function Remove-PureOneArrayTags {
+    <#
+    .SYNOPSIS
+      Removes one or more tags for a given array or arrays in Pure1
+    .DESCRIPTION
+      Removes one or more tags for a given array or arrays in Pure1
+    .INPUTS
+      Array name(s) or ID(s) and one or more tag key names and/or optionally an access token. If you do not enter a key name, all tags for the input arrays will be removed.
+    .OUTPUTS
+      Returns nothing.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/15/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string[]]$arrayNames,
+         
+            [Parameter(Position=1)]
+            [string[]]$arrayIds,
+
+            [Parameter(Position=2)]
+            [string[]]$tagKeys,
+
+            [Parameter(Position=3)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($arrayNames.Count -gt 0) -and ($arrayIds.Count -gt 0))
+        {
+            throw "Please only enter one or more array names or one or more array IDs."
+        }
+        if (($arrayNames.Count -eq 0) -and ($arrayIds.Count -eq 0))
+        {
+            throw "Please enter one or more array names or an array IDs."
+        }
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        if ($arrayNames.count -gt 0)
+        {
+            $objectQuery = "?resource_names="
+            for ($i=0;$i -lt $arrayNames.count; $i++)
+            {
+                if ($i-eq 0)
+                {
+                    $objectQuery = $objectQuery + "`'$($arrayNames[$i])`'"
+                }
+                else {
+                    $objectQuery = $objectQuery + ",`'$($arrayNames[$i])`'"
+                }
+            }
+        }
+        if ($arrayIds.Count -gt 0)
+        {
+            $objectQuery = "?resource_ids="
+            for ($i=0;$i -lt $arrayIds.count; $i++)
+            {
+                if ($i-eq 0)
+                {
+                    $objectQuery = $objectQuery + "`'$($arrayIds[$i])`'"
+                }
+                else {
+                    $objectQuery = $objectQuery + ",`'$($arrayIds[$i])`'"
+                }
+            }
+        }
+        if ($tagKeys.Count -gt 0)
+        {
+            $objectQuery = $objectQuery + "&keys="
+            for ($i=0;$i -lt $tagKeys.count; $i++)
+            {
+                if ($i-eq 0)
+                {
+                    $objectQuery = $objectQuery + "`'$($tagKeys[$i])`'"
+                }
+                else {
+                    $objectQuery = $objectQuery + ",`'$($tagKeys[$i])`'"
+                }
+            }
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/arrays/tags" + $objectQuery
+        $pureArrayTags = Invoke-RestMethod -Method Delete -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader   
+    }
+    End{
+        return $pureArrayTags
+    }
+}
+function Get-PureOneArrayNetworking {
+    <#
+    .SYNOPSIS
+      Returns the networking information for a given array in Pure1
+    .DESCRIPTION
+      Returns the the networking information for a given array in Pure1
+    .INPUTS
+      Array name or ID and optionally access token.
+    .OUTPUTS
+      Returns the Pure Storage array network information in Pure1.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/16/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string]$arrayName,
+         
+            [Parameter(Position=1)]
+            [string]$arrayId,
+
+            [Parameter(Position=2)]
+            [Switch]$virtualIP,
+
+            [Parameter(Position=3)]
+            [string]$service,
+
+            [Parameter(Position=4)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($virtualIP -eq $true) -and (($service -ne "management") -and ($service -ne "") ))
+        {
+            throw "Virtual IPs are only management-based services, so you cannot request virtual IPs with $($service) as the service"
+        }
+        if (($arrayName -eq "") -and ($arrayId -eq ""))
+        {
+            throw "Please enter an array name or ID."
+        }
+        elseif (($arrayName -ne "") -and ($arrayId -ne ""))
+        {
+            throw "Please only enter an array name or an ID."
+        }
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        $restQuery = "?"
+        if ($virtualIP -eq $true)
+        {
+            $restQuery = $restQuery + "names=`'vir1`',`'vir0`'&"
+        }
+        if ($arrayName -ne "")
+        {
+            $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+        }
+        if ($arrayId -ne "")
+        {
+            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+        }
+        if ($service -ne "")
+        {
+            $restQuery = $restQuery + " and services[any]=`'$($service)`'"
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/network-interfaces" + $restQuery
+        $pureArrayNetwork = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader 
+    }
+    End{
+        return $pureArrayNetwork.items
+    }
+}
+function Get-PureOneMetricDetails {
+    <#
+    .SYNOPSIS
+      Returns the available metrics in Pure1 
+    .DESCRIPTION
+      Returns the available metrics in Pure1 and their specifics
+    .INPUTS
+      Resource type or metric name and/or access token.
+    .OUTPUTS
+      Returns the Pure Storage array information in Pure1.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/18/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string]$metricName,
+         
+            [Parameter(Position=1)]
+            [string]$resourceType,
+
+            [Parameter(Position=2)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        $restQuery = "?"
+        if ($resourceType -ne "")
+        {
+            $restQuery = $restQuery + "resource_types=`'$($resourceType)`'&"
+        }
+        if ($metricName -ne "")
+        {
+            $restQuery = $restQuery +"names=`'$($metricName)`'"
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/metrics" + $restQuery
+        $pureOneMetrics = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader 
+    }
+    End{
+        return $pureOneMetrics.items
+    }
+}
+function Get-PureOneMetrics {
+    <#
+    .SYNOPSIS
+      Returns the metrics for a given array in Pure1
+    .DESCRIPTION
+      Returns the metrics for a given array in Pure1, either an average or a maximum of a given time period. Default behavior is to return the average.
+    .INPUTS
+      Required: resource name or ID and metric name. Optional: timeframe, granularity, and aggregation type (if none entered defaults will be used based on metric entered). Also optionally an access token.
+    .OUTPUTS
+      Returns the Pure Storage array information in Pure1.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/18/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string]$objectName,
+         
+            [Parameter(Position=1)]
+            [string]$objectId,
+
+            [Parameter(Position=2)]
+            [switch]$average,
+
+            [Parameter(Position=3)]
+            [switch]$maximum,
+
+            [Parameter(Position=4,mandatory=$True)]
+            [string]$metricName,
+
+            [Parameter(Position=5)]
+            [System.DateTime]$startTime,
+
+            [Parameter(Position=6)]
+            [System.DateTime]$endTime,
+
+            [Parameter(Position=7)]
+            [Int64]$granularity,
+
+            [Parameter(Position=8)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($average -eq $true) -and ($maximum -eq $true))
+        {
+            throw "Please only choose average or maximum, not both."
+        }
+        elseif (($average -eq $false) -and ($maximum -eq $false)) 
+        {
+            #defaulting to average if neither option is entered
+            $average = $true
+        }
+        if (($objectName -eq "") -and ($objectId -eq ""))
+        {
+            throw "Please enter an object name or ID."
+        }
+        elseif (($objectName -ne "") -and ($objectId -ne ""))
+        {
+            throw "Please only enter an object name or an ID."
+        }
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        #get metric rules
+        $metricDetails = Get-PureOneMetricDetails -metricName $metricName
+        #set granularity if not set
+        if ($granularity -eq 0)
+        {
+            $granularity = $metricDetails.availabilities.resolution
+        }
+
+        #set end time to start time minus retention for that stat (if not entered) and convert to epoch time
+        if ($endTime -eq $null)
+        {
+            $endTime = Get-Date
+            $endTime = $endTime.ToUniversalTime()
+        }
+        else {
+            $endTime = $endTime.ToUniversalTime()
+        }
+        [datetime]$epoch = '1970-01-01 00:00:00'
+        $endEpoch = (New-TimeSpan -Start $epoch -End $endTime).TotalMilliSeconds
+        $endEpoch = [math]::Round($endEpoch)
+
+        #set start time to current time (if not entered) and convert to epoch time
+        if ($startTime -eq $null)
+        {
+            $startTime = $epoch.AddMilliseconds($metricDetails._as_of - $metricDetails.availabilities.retention)
+        }
+        else {
+            $startTime = $startTime.ToUniversalTime()
+        }
+        $startEpoch = (New-TimeSpan -Start $epoch -End $startTime).TotalMilliSeconds
+        $startEpoch = [math]::Round($startEpoch)
+
+        #building query
+        if ($average -eq $true)
+        {
+            $restQuery = "?aggregation='avg'&end_time=$($endEpoch)&names=`'$($metricName)`'&resolution=$($granularity)&start_time=$($startEpoch)&"
+        }
+        else {
+            $restQuery = "?aggregation='max'&end_time=$($endEpoch)&names=`'$($metricName)`'&resolution=$($granularity)&start_time=$($startEpoch)&"
+        }
+        if ($objectName -ne "")
+        {
+            $restQuery = $restQuery + "resource_names=`'$($objectName)`'"
+        }
+        else {
+            $restQuery = $restQuery + "ids=`'$($objectId)`'"
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/metrics/history" + $restQuery
+        $pureOneMetrics = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader 
+    }
+    End{
+        return $pureOneMetrics.items
+    }
+}
+function Get-PureOneVolumes {
+    <#
+    .SYNOPSIS
+      Returns all Pure Storage volumes listed in your Pure1 account.
+    .DESCRIPTION
+      Returns all Pure Storage volumes listed in your Pure1 account. Allows for some filters.
+    .INPUTS
+      None required. Optional inputs are array type, array name, and Pure1 access token.
+    .OUTPUTS
+      Returns the Pure Storage array information in Pure1.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/18/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string]$arrayName,
+            
+            [Parameter(Position=1)]
+            [string]$arrayId,
+
+            [Parameter(Position=2)]
+            [string]$volumeName,
+
+            [Parameter(Position=3)]
+            [string]$volumeSerial,
+
+            [Parameter(Position=4)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($volumeName -ne "") -and ($volumeSerial -ne ""))
+        {
+            throw "Please enter an volume name or a serial number."
+        }
+        if (($arrayName -ne "") -and ($arrayId -ne ""))
+        {
+            throw "Please enter an array name or an array ID."
+        }
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        $restQuery = "?"
+        if ($volumeName -ne "")
+        {
+            $restQuery = $restQuery + "names=`'$($volumeName)`'"
+            if (($arrayName -ne "") -or ($arrayId -ne ""))
+            {
+                $restQuery = $restQuery + "&"
+            }
+        }
+        elseif ($volumeSerial -ne "")
+        {
+            $volumeSerial = $volumeSerial.ToUpper()
+            $restQuery = $restQuery +"filter=serial=`'$($volumeSerial)`'"
+            if ($arrayName -ne "")
+            {
+                $restQuery = $restQuery + " and arrays[any].name=`'$($arrayName)`'"
+            }
+            if ($arrayId -ne "")
+            {
+                $restQuery = $restQuery + " and arrays[any].id=`'$($arrayId)`'"
+            }
+        }
+        if ($volumeSerial -eq "")
+        {
+            if ($arrayName -ne "")
+            {
+                $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+            }
+            if ($arrayId -ne "")
+            {
+                $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+            }
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/volumes" + $restQuery
+        $pureVolumes = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader     
+    }
+    End{
+        return $pureVolumes.items
+    }
+}
+function Get-PureOnePods {
+    <#
+    .SYNOPSIS
+      Returns all Pure Storage pods listed in your Pure1 account.
+    .DESCRIPTION
+      Returns all Pure Storage pods listed in your Pure1 account. Allows for some filters.
+    .INPUTS
+      None required. Optional inputs are pod name, array name or ID, and Pure1 access token.
+    .OUTPUTS
+      Returns the Pure Storage pod information in Pure1.
+    .NOTES
+      Version:        1.0
+      Author:         Cody Hosterman https://codyhosterman.com
+      Creation Date:  01/18/2019
+      Purpose/Change: Initial script development
+  
+    *******Disclaimer:******************************************************
+    This scripts are offered "as is" with no warranty.  While this 
+    scripts is tested and working in my environment, it is recommended that you test 
+    this script in a test lab before using in a production environment. Everyone can 
+    use the scripts/commands provided here without any written permission but I
+    will not be liable for any damage or loss to the system.
+    ************************************************************************
+    #>
+
+    [CmdletBinding()]
+    Param(
+            [Parameter(Position=0)]
+            [string]$arrayName,
+            
+            [Parameter(Position=1)]
+            [string]$arrayId,
+
+            [Parameter(Position=2)]
+            [string]$podName,
+
+            [Parameter(Position=3)]
+            [string]$pureOneToken
+    )
+    Begin{
+        if (($arrayName -ne "") -and ($arrayId -ne ""))
+        {
+            throw "Please enter an array name or an array ID."
+        }
+        if (($null -eq $Global:pureOneRestHeader) -and ($pureOneToken -ne ""))
+        {
+            throw "No access token found in the global variable or passed in. Run the cmdlet New-PureOneRestConnection to authenticate."
+        }
+        if ($null -eq $Global:pureOneRestHeader)
+        {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        elseif (($null -ne $pureOneToken) -and ($pureOneToken -ne "")) {
+            $pureOneHeader = @{authorization="Bearer $($pureOnetoken)"}
+        }
+        else {
+            $pureOneHeader = $Global:pureOneRestHeader
+        }
+    }
+    Process{
+        $restQuery = "?"
+        if ($podName -ne "")
+        {
+            $restQuery = $restQuery + "names=`'$($podName)`'"
+            if (($arrayName -ne "") -or ($arrayId -ne ""))
+            {
+                $restQuery = $restQuery + "&"
+            }
+        }
+        if ($arrayName -ne "")
+        {
+            $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+        }
+        if ($arrayId -ne "")
+        {
+            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+        }
+        $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/pods" + $restQuery
+        $purePods = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader     
+    }
+    End{
+        return $purePods.items
     }
 }
