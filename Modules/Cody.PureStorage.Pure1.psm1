@@ -1189,7 +1189,7 @@ function Get-PureOneVolumeSnapshots {
             }
             if ($arrayId -ne "")
             {
-                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id") + "=`'$($arrayId)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id")) + "=`'$($arrayId)`'"
             }
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/volume-snapshots" + $restQuery
