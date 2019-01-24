@@ -670,15 +670,16 @@ function Get-PureOneArrayNetworking {
         }
         if ($arrayName -ne "")
         {
-            $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+            #URL encoding the square brackets as some network do not pass them properly
+            $restQuery = $restQuery + "filter=" + ([System.Web.HttpUtility]::Urlencode("arrays[any].name")) + "=`'$($arrayName)`'"
         }
         if ($arrayId -ne "")
         {
-            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+            $restQuery = $restQuery + "filter=" + ([System.Web.HttpUtility]::Urlencode("arrays[any].name")) + "=`'$($arrayId)`'"
         }
         if ($service -ne "")
         {
-            $restQuery = $restQuery + " and services[any]=`'$($service)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode(" and services[any]")) + "=`'$($service)`'"
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/network-interfaces" + $restQuery
         $pureArrayNetwork = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader 
@@ -979,22 +980,22 @@ function Get-PureOneVolumes {
             $restQuery = $restQuery +"filter=serial=`'$($volumeSerial)`'"
             if ($arrayName -ne "")
             {
-                $restQuery = $restQuery + " and arrays[any].name=`'$($arrayName)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode(" and arrays[any].name")) + "=`'$($arrayName)`'"
             }
             if ($arrayId -ne "")
             {
-                $restQuery = $restQuery + " and arrays[any].id=`'$($arrayId)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode(" and arrays[any].id")) + "=`'$($arrayId)`'"
             }
         }
         if ($volumeSerial -eq "")
         {
             if ($arrayName -ne "")
             {
-                $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].name")) + "=`'$($arrayName)`'"
             }
             if ($arrayId -ne "")
             {
-                $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id")) + "=`'$($arrayId)`'"
             }
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/volumes" + $restQuery
@@ -1075,11 +1076,11 @@ function Get-PureOnePods {
         }
         if ($arrayName -ne "")
         {
-            $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].name")) + "=`'$($arrayName)`'"
         }
         if ($arrayId -ne "")
         {
-            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id")) + "=`'$($arrayId)`'"
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/pods" + $restQuery
         $purePods = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader     
@@ -1173,22 +1174,22 @@ function Get-PureOneVolumeSnapshots {
             $restQuery = $restQuery +"filter=serial=`'$($snapshotSerial)`'"
             if ($arrayName -ne "")
             {
-                $restQuery = $restQuery + " and arrays[any].name=`'$($arrayName)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode(" and arrays[any].name")) + "=`'$($arrayName)`'"
             }
             if ($arrayId -ne "")
             {
-                $restQuery = $restQuery + " and arrays[any].id=`'$($arrayId)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode(" and arrays[any].id")) + "=`'$($arrayId)`'"
             }
         }
         if ($snapshotSerial -eq "")
         {
             if ($arrayName -ne "")
             {
-                $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].name")) + "=`'$($arrayName)`'"
             }
             if ($arrayId -ne "")
             {
-                $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+                $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id") + "=`'$($arrayId)`'"
             }
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/volume-snapshots" + $restQuery
@@ -1274,11 +1275,11 @@ function Get-PureOneFileSystems {
         }
         if ($arrayName -ne "")
         {
-            $restQuery = $restQuery + "filter=arrays[any].name=`'$($arrayName)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].name")) + "=`'$($arrayName)`'"
         }
         if ($arrayId -ne "")
         {
-            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id")) + "=`'$($arrayId)`'"
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/file-systems" + $restQuery
         $pureFileSystems = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader     
@@ -1361,11 +1362,11 @@ function Get-PureOneFileSystemSnapshots {
         }
         if ($arrayName -ne "")
         {
-            $restQuery = $restQuery +"filter=arrays[any].name=`'$($arrayName)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].name")) + "=`'$($arrayName)`'"
         }
         if ($arrayId -ne "")
         {
-            $restQuery = $restQuery + "filter=arrays[any].id=`'$($arrayId)`'"
+            $restQuery = $restQuery + ([System.Web.HttpUtility]::Urlencode("filter=arrays[any].id")) + "=`'$($arrayId)`'"
         }
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/file-system-snapshots" + $restQuery
         $pureSnapshots = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader   
@@ -1511,6 +1512,7 @@ function Get-PureOneArrayBusyMeter {
         else {
             $restQuery = $restQuery + "ids=`'$($objectId)`'"
         }
+        
         $apiendpoint = "https://api.pure1.purestorage.com/api/1.0/metrics/history" + $restQuery
         $pureOneMetrics = Invoke-RestMethod -Method Get -Uri $apiendpoint -ContentType "application/json" -Headers $pureOneHeader 
     }
