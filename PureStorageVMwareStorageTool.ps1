@@ -18,12 +18,12 @@ This can be run directly from PowerCLI or from a standard PowerShell prompt. Pow
 Supports:
 -PowerShell 3.0 or later
 -Pure Storage PowerShell SDK 1.7 or later
--PowerCLI 6.3 Release 1+
--Purity 4.7 and later
--FlashArray 400 Series and //m
--vCenter 5.5 and later
+-PowerCLI 6.5 Release 1+
+-Purity 4.8 and later
+-FlashArray 400 Series and //m and //x
+-vCenter 6.0 and later
 
-'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.8.0'
+'Pure Storage FlashArray VMware Snapshot Recovery Tool v2.8.1'
 #>
 #Import PowerCLI. Requires PowerCLI version 6.3 or later. Will fail here if PowerCLI is not installed
 #Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
@@ -1009,7 +1009,8 @@ function getPiTSnapshots{
         {
             
             $selectedPiT = $script:pgroupsnapshots[$PgroupSnapDropDownBox.SelectedIndex-1].name
-            $script:volumeSnapshots = Get-PfaVolumeSnapshots -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -VolumeName * |where-object {$_.name -like "$($selectedPiT).*"}
+            $selectedPG = $PgroupPGDropDownBox.SelectedItem.ToString()
+            $script:volumeSnapshots = Get-PfaProtectionGroupVolumeSnapshots -Array $endpoints[$PgroupFADropDownBox.SelectedIndex-1] -Name $selectedPG |where-object {$_.name -like "$($selectedPiT).*"}
             $SnapshotCheckedListBox.Items.Clear()
             $SnapshotCheckedListBox.Enabled=$false
             $buttonDeletePgroupSnap.Enabled = $true
