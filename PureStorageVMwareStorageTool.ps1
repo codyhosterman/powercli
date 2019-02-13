@@ -29,13 +29,13 @@ Supports:
 #Will try to install PowerCLI with PowerShellGet if PowerCLI is not present.
 
 if ((!(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)) -and (!(get-Module -Name VMware.PowerCLI -ListAvailable))) {
-    if (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    if (Test-Path "C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1")
     {
-      . “C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+      . "C:\Program Files (x86)\VMware\Infrastructure\PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" |out-null
     }
-    elseif (Test-Path “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1”)
+    elseif (Test-Path "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1")
     {
-        . “C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1” |out-null
+        . "C:\Program Files (x86)\VMware\Infrastructure\vSphere PowerCLI\Scripts\Initialize-PowerCLIEnvironment.ps1" |out-null
     }
     elseif (!(get-Module -Name VMware.PowerCLI -ListAvailable))
     {
@@ -684,7 +684,7 @@ function getDisks{
                                 $VMDKDropDownBox.Items.Add("Choose a VMDK...")
                             }
                             $atLeastOnevdisk = $true
-                            $VMDKDropDownBox.Items.Add(("$($vmdevice.Backing.fileName) ($($vmdevice.CapacityInKB/1024/1024) GB)"))
+                            $VMDKDropDownBox.Items.Add(($($vmdevice.Backing.fileName) + " (" + $($vmdevice.CapacityInKB/1024/1024) + " GB)"))
                         }
                     } 
                 }
@@ -718,7 +718,7 @@ function getDisks{
                                 $RDMDropDownBox.Items.Add("Choose a RDM...")
                             }
                             $atLeastOnerdm = $true
-                            $RDMname = ("naa.$($vmdevice.Backing.DeviceName.substring(14,32)) ($($vmdevice.CapacityInKB/1024/1024) GB)")
+                            $RDMname = ('naa.' + $($vmdevice.Backing.DeviceName.substring(14,32)) + ' (' + $($vmdevice.CapacityInKB/1024/1024) + ' GB)')
                             $RDMDropDownBox.Items.Add($RDMname)
                         }
                     } 
@@ -3938,19 +3938,19 @@ function addToPgroup{
     $TabControl.Enabled = $false
     
     $VMFSTab = New-Object System.Windows.Forms.TabPage
-    $VMFSTab.Text = "VMFS Management”
+    $VMFSTab.Text = "VMFS Management"
     $tabControl.Controls.Add($VMFSTab)
 
     $VMTab = New-Object System.Windows.Forms.TabPage
-    $VMTab.Text = "Virtual Machine Management”
+    $VMTab.Text = "Virtual Machine Management"
     $tabControl.Controls.Add($VMTab)
 
     $HostTab = New-Object System.Windows.Forms.TabPage
-    $HostTab.Text = "Host Management”
+    $HostTab.Text = "Host Management"
     $tabControl.Controls.Add($HostTab)
     
     $PgrpTab = New-Object System.Windows.Forms.TabPage
-    $PgrpTab.Text = "Protection Group Recovery”
+    $PgrpTab.Text = "Protection Group Recovery"
     $tabControl.Controls.Add($PgrpTab)
 
 
