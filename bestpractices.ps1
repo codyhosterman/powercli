@@ -402,14 +402,35 @@ foreach ($esx in $hosts)
             } 
             if ($issuecount -ge 1)
             {
+                [bool]$RuleDeleted=$false
                 $satpArgs = $esxcli.storage.nmp.satp.rule.remove.createArgs()
                 $satpArgs.model = $rule.Model
                 $satpArgs.vendor = "PURE"
                 $satpArgs.satp = $rule.Name
                 $satpArgs.psp = $rule.DefaultPSP
                 $satpArgs.pspoption = $rule.PSPOptions
-                add-content $logfile "This rule is incorrect, deleting..."
-                $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
+                add-content $logfile "This rule is incorrect, trying to delete..."
+              	try
+		{
+                    $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
+                    add-content $logfile "rule deleted successfully"
+                    $RuleDeleted=$true
+                }
+                catch {
+                    add-content $logfile "Deleting of rule failed maybe boot property is not set correctly"
+                }
+                if($RuleDeleted -ne $true)
+                {
+                    add-content $logfile "This rule is incorrect, trying to delete with boot=true..."
+                    $satpArgs.boot=$true
+                    $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
+                    add-content $logfile "rule deleted successfully"
+                    $RuleDeleted=$true
+                }
+                if($RuleDeleted -ne $true)
+                {
+                    add-content $logfile "rule delete failed"
+                }
                 add-content $logfile "*****NOTE: Deleted the rule.*****"
                 add-content $logfile "-----------------------------------------------"
             }
