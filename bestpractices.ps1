@@ -408,6 +408,7 @@ foreach ($esx in $hosts)
                 $satpArgs.satp = $rule.Name
                 $satpArgs.psp = $rule.DefaultPSP
                 $satpArgs.pspoption = $rule.PSPOptions
+                $satpArgs.boot=$true
                 add-content $logfile "This rule is incorrect, deleting..."
                 $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
                 add-content $logfile "*****NOTE: Deleted the rule.*****"
