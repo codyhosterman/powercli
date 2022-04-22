@@ -402,7 +402,7 @@ foreach ($esx in $hosts)
             } 
             if ($issuecount -ge 1)
             {
-                [bool]$RuleDeleted=$true
+                [bool]$RuleDeleted=$false
                 $satpArgs = $esxcli.storage.nmp.satp.rule.remove.createArgs()
                 $satpArgs.model = $rule.Model
                 $satpArgs.vendor = "PURE"
@@ -411,7 +411,7 @@ foreach ($esx in $hosts)
                 $satpArgs.pspoption = $rule.PSPOptions
                 add-content $logfile "This rule is incorrect, trying to delete..."
               	try
-				{
+		{
                     $esxcli.storage.nmp.satp.rule.remove.invoke($satpArgs)
                     add-content $logfile "rule deleted successfully"
                     $RuleDeleted=$true
